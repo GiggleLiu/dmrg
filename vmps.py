@@ -8,9 +8,7 @@ from scipy.sparse import csr_matrix,coo_matrix
 from matplotlib.pyplot import *
 import time,pdb
 
-from core.contraction import BHKContraction,contract
-from core import tensor
-from core.mps import NORMAL_ORDER
+from rglib.mps import NORMAL_ORDER,BHKContraction,contract,tensor
 
 __all__=['VMPSEngine']
 

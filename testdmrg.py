@@ -7,12 +7,10 @@ from numpy.testing import dec,assert_,assert_raises,assert_almost_equal,assert_a
 import pdb,time,copy
 
 from tba.hgen import SpinSpaceConfig
-from core.mpo import MPO,OpUnitI
-from core.mpolib import opunit_Sz,opunit_Sp,opunit_Sm,opunit_Sx,opunit_Sy
-from core.mps import MPS
+from rglib.mps import MPO,OpUnitI,opunit_Sz,opunit_Sp,opunit_Sm,opunit_Sx,opunit_Sy,MPS
+from rglib.hexpand import SpinHGen
+from rglib.hexpand import MaskedEvolutor,NullEvolutor
 from dmrg import DMRGEngine
-from hexpand.spinhexpand import DMRGSpinHGen
-from hexpand.evolutor import MaskedEvolutor,NullEvolutor
 from vmps import VMPSEngine
 from vmpsapp import VMPSApp
 
@@ -123,18 +121,18 @@ class DMRGTest():
         '''
         Run vMPS for Heisenberg model.
         '''
+        nsite=10
         filename='mps_heisenberg_%s.dat'%(nsite)
-        model=self.get_model()
-        if append:
-            mps=MPS.load(filename)
-        else:
-            #run dmrg to get the initial guess.
-            hgen=DMRGSpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=MaskedEvolutor(hndim=2))
-            dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen,tol=0)
-            dmrgegn.run_finite(endpoint=(1,'<-',0),maxN=40,tol=1e-12)
-            #hgen=dmrgegn.query('r',nsite-1)
-            mps=dmrgegn.get_mps(direction='<-')  #right normalized initial state
-            mps.save(filename)
+        model=self.get_model(nsite,which=1)
+
+        #mps=MPS.load(filename)
+        #run dmrg to get the initial guess.
+        hgen=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=MaskedEvolutor(hndim=2))
+        dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen,tol=0)
+        dmrgegn.run_finite(endpoint=(1,'<-',0),maxN=40,tol=1e-12)
+        #hgen=dmrgegn.query('r',nsite-1)
+        mps=dmrgegn.get_mps(direction='<-')  #right normalized initial state
+        mps.save(filename)
 
         #run vmps
         vegn=VMPSEngine(H=model.H,k0=mps)
@@ -145,8 +143,8 @@ class DMRGTest():
         Run iDMFT for heisenberg model.
         '''
         model=self.get_model(10,1)
-        hgen1=DMRGSpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=NullEvolutor(hndim=2))
-        hgen2=DMRGSpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=MaskedEvolutor(hndim=2))
+        hgen1=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=NullEvolutor(hndim=2))
+        hgen2=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=MaskedEvolutor(hndim=2))
         dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen1,tol=0)
         EG1=dmrgegn.direct_solve()
         dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen2,tol=0)
@@ -157,10 +155,11 @@ class DMRGTest():
         '''test for infinite dmrg.'''
         maxiter=100
         model=self.get_model(maxiter+2,1)
-        hgen=DMRGSpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=MaskedEvolutor(hndim=2))
+        hgen=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=MaskedEvolutor(hndim=2))
         dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen,tol=0)
         EG=dmrgegn.run_infinite(maxiter=maxiter,maxN=20,tol=0)[-1]
         assert_almost_equal(EG,0.25-log(2),decimal=2)
 
-DMRGTest().test_dmrg_finite()
+#DMRGTest().test_dmrg_finite()
 #DMRGTest().test_dmrg_infinite()
+DMRGTest().test_vmps()
