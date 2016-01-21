@@ -1,9 +1,7 @@
 #from numpy.distutils.core import setup, Extension
 def configuration(parent_package='',top_path=None):
     from numpy.distutils.misc_util import Configuration
-    config=Configuration('mps',parent_package,top_path,version='0.0.0',author='JinGuo Leo',author_email='cacate0129@gmail.com')
-    config.add_subpackage('core')
-    config.add_subpackage('hexpand')
+    config=Configuration('dmrg',parent_package,top_path,version='0.0.0',author='JinGuo Leo',author_email='cacate0129@gmail.com')
     config.make_config_py()
     return config
 

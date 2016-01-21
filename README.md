@@ -1,2 +1,3 @@
-# mps
-Matrix product state and matrix product operators. 
+# DMRG and vMPS
+
+Numerical methods of density matrix renormalization group and variational matrix product state.
