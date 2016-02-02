@@ -4,13 +4,14 @@ DMRG Engine.
 
 from numpy import *
 from scipy.sparse.linalg import eigsh
-import scipy.sparse as sps
 from scipy.linalg import eigh
+from matplotlib.pyplot import *
+import scipy.sparse as sps
 import copy,time,pdb,warnings
 
-from blockmatrix.blocklib import eigbsh,eigbh
+from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker
 from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString
-from rglib.hexpand import NullEvolutor
+from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor
 
 ZERO_REF=1e-12
 
@@ -20,10 +21,12 @@ def site_image(ops,NL,NR):
     '''
     Perform imaging transformation for operator sites.
     
-    NL/NR:
-        The number of sites in left and right block.
-    ops:
-        The operator(s) for operation.
+    Parameters:
+        :NL/NR: int, the number of sites in left and right block.
+        :ops: list of <OpString>/<OpUnit>, the operator(s) for operation.
+
+    Return:
+        list of <OpString>/<OpUnit>, the operators after imaginary operation.
     '''
     opss=[]
     if not isinstance(ops,(list,tuple,ndarray)):
@@ -75,12 +78,40 @@ class SuperBlock(object):
         '''The hamiltonian dimension of a single site.'''
         return self.hl.hndim
 
+    def get_op_onlink(self,ouA,ouB):
+        '''
+        Get the operator on the link.
+        
+        Parameters:
+            :ouA/ouB: <OpUnit>, the opunit on left/right link site.
+
+        Return:
+            matrix, the hamiltonian term.
+        '''
+        NL,NR=self.hl.N,self.hr.N
+        sgnr=self.hr.zstring.get(self.hr.N-1).diagonal()
+        scfg=self.hl.spaceconfig
+        assert(ouA.siteindex==NL-1 and ouB.siteindex==NR-1)
+        if ouA.fermionic:
+            assert(sgnr is not None)
+            sgn=Z4scfg(scfg)
+            mA=sps.kron(sps.identity(self.hl.ndim/scfg.hndim),sps.csr_matrix(ouA.get_data()).dot(sgn))
+            mB=sps.kron(sps.diags(sgnr,0),sps.csr_matrix(ouB.get_data()))
+        else:
+            mA=sps.kron(sps.identity(self.hl.ndim/scfg.hndim),sps.csr_matrix(ouA.data))
+            mB=sps.kron(sps.identity(self.hl.ndim/scfg.hndim),sps.csr_matrix(ouB.data))
+        op=sps.kron(mA,mB)
+        return op
+
     def get_op(self,opstring):
         '''
         Get the hamiltonian from a opstring instance.
 
-        opstring:
-            The hamiltonian string.
+        Parameters:
+            :opstring: <OpString>, the operator string.
+
+        Return:
+            matrix, the hamiltonian term.
         '''
         hndim=self.hndim
         siteindices=list(opstring.siteindex)
@@ -95,10 +126,13 @@ class SuperBlock(object):
             if ou.siteindex<NL:
                 opll.append(ou)
             else:
-                #ou=copy.copy(ou)
-                #ou.siteindex=(nsite-NL-1)-(ou.siteindex-NL)
                 ou=site_image(ou,NL,NR)
                 oprl.append(ou)
+        #handle the fermionic link.
+        if len(opll)>0 and len(oprl)>0 and opll[0].fermionic:
+            if len(opll)!=1 or opll[0].siteindex!=NL-1 or len(oprl)!=1 or oprl[0].siteindex!=NR-1:
+                raise NotImplementedError('Only nearest neighbor term is allowed for fermionic links!')
+            return self.get_op_onlink(opll[0],oprl[0])
         if len(opll)>0:
             opstr=prod(opll)
             if isinstance(opstr,OpString):
@@ -119,21 +153,17 @@ class DMRGEngine(object):
     '''
     DMRG Engine.
 
-    Attributes
-    --------------------------
-    hchain:
-        A chain of hamiltonian, an <OpCollection> instance.
-    tol:
-        When maxN and tol are both set, we keep the lower dimension.
-    hgen:
-        Hamiltonian Generator.
-    maxbond:
-        The maximum bond length.
+    Attributes:
+        :hchain: <OpCollection>, the chain hamiltonian.
+        :hgen: <RGHGen>, hamiltonian Generator.
+        :bmg: <BlockMarkerGenerator>, the block marker generator.
+        :tol: float, the tolerence, when maxN and tol are both set, we keep the lower dimension.
     '''
-    def __init__(self,hchain,hgen,tol=0):
+    def __init__(self,hchain,hgen,bmg=None,tol=0):
         self.hchain=hchain
         self.tol=tol
         self.hgen=hgen
+        self.bmg=bmg
         self.reset()
 
     @property
@@ -215,7 +245,7 @@ class DMRGEngine(object):
                     else:
                         hgen_r=self.query('r',nsite-i-2)
                     print 'A'*hgen_l.N+'..'+'B'*hgen_r.N
-                    opi=unique(self.hchain.query(i)+self.hchain.query(i+1))
+                    opi=set(self.hchain.query(i)+self.hchain.query(i+1))
                     opi=filter(lambda op:all(array(op.siteindex)<=(hgen_l.N+hgen_r.N+1)),opi)
 
                     #run a step
@@ -287,19 +317,22 @@ class DMRGEngine(object):
                 break
         return EL
 
-    def dmrg_step(self,hgen_l,hgen_r,ops,direction='->',tol=0,maxN=20):
+    def dmrg_step(self,hgen_l,hgen_r,ops,direction='->',tol=0,maxN=20,block_params={}):
         '''
         Run a single step of DMRG iteration.
 
-        hgen:
-            The hamiltonian generator.
-        ops:
-            The links between operators.
-        direction:
-            '->', right scan.
-            '<-', left scan.
-        maxN:
-            Maximum number of kept states and the tolerence for truncation weight.
+        Parameters:
+            :hgen_l,hgen_r: <RGHGen>, the hamiltonian generator for left and right blocks.
+            :ops: list of <OpString>/<OpUnit>, the relevant operators to update.
+            :direction: str,
+
+                * '->', right scan.
+                * '<-', left scan.
+            :tol: float, the rolerence.
+            :maxN: int, maximum number of kept states and the tolerence for truncation weight.
+
+        Return:
+            tuple of (ground state energy(float), unitary matrix(2D array), kpmask(1D array of bool), truncation error(float))
         '''
         assert(direction=='->' or direction=='<-')
         t0=time.time()
@@ -313,14 +346,6 @@ class DMRGEngine(object):
             if any(siteindices>NL+NR+1) or any(siteindices<0):
                 print 'Drop opstring %s'%op
             elif all(siteindices>NL):
-                #oprl=[]
-                #for ou in op.opunits:
-                #    ou=copy.copy(ou)
-                #    ou.siteindex=NR-(ou.siteindex-NL-1)
-                #    oprl.append(ou)
-                #opstr=prod(oprl)
-                #if isinstance(opstr,OpString):
-                #    opstr.compactify()
                 opstr=site_image(op,NL+1,NR+1)
                 intraop_r.append(opstr)
             elif all(siteindices<=NL):
@@ -335,6 +360,21 @@ class DMRGEngine(object):
             HR0=HL0
         else:
             HR0=hgen_r.expand(intraop_r)
+        #blockize HL0 and HR0
+        if self.bmg is not None:
+            target_block=block_params.get('target_block')
+            n=max(hgen_l.N,hgen_r.N)
+            if isinstance(hgen_l.evolutor,MaskedEvolutor) and n>1:
+                kpmask_l=hgen_l.evolutor.kpmask(hgen_l.N-2)
+                kpmask_r=hgen_r.evolutor.kpmask(hgen_r.N-2)
+            else:
+                kpmask_l=kpmask_r=None
+            bml=self.bmg.update_blockmarker(hgen_l.block_marker,kpmask=kpmask_l)
+            bmr=self.bmg.update_blockmarker(hgen_r.block_marker,kpmask=kpmask_r)
+        else:
+            bml=get_blockmarker(HL0)
+            bmr=get_blockmarker(HR0)
+
         H=sps.kron(HL0,sps.identity(ndimr))+sps.kron(sps.identity(ndiml),HR0)
         sb=SuperBlock(hgen_l,hgen_r)
         Hin=[]
@@ -345,19 +385,36 @@ class DMRGEngine(object):
         #blockize and get the eigenvalues.
         #(e,),v=eigsh(H,which='SA',k=1)
         t1=time.time()
-        e,v,bm,H=eigbsh(H,nsp=500,tol=1e-10,maxiter=5000)
-        v=bm.antiblockize(v).toarray()
+        e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=1e-10,which='S',maxiter=5000)
+        print v.shape,bm_tot.N
+        v=bm_tot.antiblockize(v).toarray()
+        #if H.shape[0]<200:
+        #    e,v=eigh(H.toarray())
+        #    e,v=e[0],v[:,0]
+        #else:
+        #    (e,),v=eigsh(H,which='SA',tol=1e-15,maxiter=5000,k=1)
         t2=time.time()
         v=v.reshape([ndiml,ndimr])
         v[abs(v)<ZERO_REF]=0
         if direction=='->':
             phi=sps.csr_matrix(v)
             rho=phi.dot(phi.T.conj())
+            bm=bml
         else:
             phi=sps.csc_matrix(v)
             rho=phi.T.dot(phi.conj())
-        spec,U,bm2,rho_b=eigbh(rho)
-        print 'Find %s(%s) blocks.'%(bm.nblock,bm2.nblock)
+            bm=bmr
+        #if self.bmg is None:
+        #    spec,U,bm,rho_b=eigbh(rho)
+        rho=bm.blockize(rho)
+        if not bm.check_blockdiag(rho):
+            ion()
+            pcolor(exp(abs(rho.toarray().real)))
+            bm.show()
+            pdb.set_trace()
+            raise Exception('density matrix is not block diagonal, which is not expected, make sure your are using additive good quantum numbers.')
+        spec,U,bm,rho_b=eigbh(rho,bm=bm)
+        print 'Find %s(%s) blocks.'%(bm.nblock,bm_tot.nblock)
 
         kpmask=zeros(U.shape[1],dtype='bool')
         spec_cut=sort(spec)[max(0,len(kpmask)-maxN)]
@@ -365,9 +422,9 @@ class DMRGEngine(object):
         print '%s states kept.'%sum(kpmask)
         trunc_error=sum(spec[~kpmask])
         if direction=='->':
-            hgen_l.trunc(U=U,block_marker=bm2,kpmask=kpmask)
+            hgen_l.trunc(U=U,block_marker=bm,kpmask=kpmask)
         else:
-            hgen_r.trunc(U=U,block_marker=bm2,kpmask=kpmask)
+            hgen_r.trunc(U=U,block_marker=bm,kpmask=kpmask)
         t3=time.time()
         print 'Elapse -> total:%s, eigen:%s'%(t3-t0,t2-t1)
         return e,U,kpmask,trunc_error
