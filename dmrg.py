@@ -137,14 +137,14 @@ class SuperBlock(object):
             opstr=prod(opll)
             if isinstance(opstr,OpString):
                 opstr.compactify()
-            opl=self.hl.get_op(opstr)
+            opl=self.hl.get_newop(opstr)
         else:
             opl=sps.identity(self.hl.ndim)
         if len(oprl)>0:
             opstr=prod(oprl)
             if isinstance(opstr,OpString):
                 opstr.compactify()
-            opr=self.hr.get_op(opstr)
+            opr=self.hr.get_newop(opstr)
         else:
             opr=sps.identity(self.hr.ndim)
         return sps.kron(opl,opr)
@@ -386,13 +386,7 @@ class DMRGEngine(object):
         #(e,),v=eigsh(H,which='SA',k=1)
         t1=time.time()
         e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=1e-10,which='S',maxiter=5000)
-        print v.shape,bm_tot.N
         v=bm_tot.antiblockize(v).toarray()
-        #if H.shape[0]<200:
-        #    e,v=eigh(H.toarray())
-        #    e,v=e[0],v[:,0]
-        #else:
-        #    (e,),v=eigsh(H,which='SA',tol=1e-15,maxiter=5000,k=1)
         t2=time.time()
         v=v.reshape([ndiml,ndimr])
         v[abs(v)<ZERO_REF]=0
@@ -407,7 +401,7 @@ class DMRGEngine(object):
         #if self.bmg is None:
         #    spec,U,bm,rho_b=eigbh(rho)
         rho=bm.blockize(rho)
-        if not bm.check_blockdiag(rho):
+        if not bm.check_blockdiag(rho,tol=1e-5):
             ion()
             pcolor(exp(abs(rho.toarray().real)))
             bm.show()
@@ -464,14 +458,17 @@ class DMRGEngine(object):
         '''
         Transform <Evolutor> instance to <MPS> instance.
 
-        direction:
-            The scan direction.
-            '->', right scan.
-            '<-', left scan.
-        labels:
-            (label_site,label_link), The labels for degree of freedom on site and intersite links.
-        order:
-            The order of indices.
+        Parameters:
+            :direction: str, the scan direction.
+
+                * '->', right scan.
+                * '<-', left scan.
+            :labels: tuple of char,
+                (label_site,label_link), The labels for degree of freedom on site and intersite links.
+            :order: sequence of [SITE,RLINK,LLINK], the order of indices.
+
+        Return:
+            <MPS>, the desired matrix product state.
         '''
         assert(direction=='->' or direction=='<-')
         nsite=self.nsite
@@ -481,9 +478,24 @@ class DMRGEngine(object):
             hgen=self.query('l',nsite-1)
             opi=self.hchain.query(nsite-1)
             H=hgen.expand(hgen,opi)
-            e,v,bm,HH=eigbsh(H,tol=1e-12)
-            hgen.trunc(U=v,block_marker=bm,kpmask=ones(1,dtype='bool'))
 
+            #blockize HL0 and HR0
+            if self.bmg is not None:
+                if isinstance(hgen.evolutor,MaskedEvolutor):
+                    kpmask=hgen.evolutor.kpmask(hgen.N-2)
+                else:
+                    kpmask=None
+                bm=self.bmg.update_blockmarker(hgen.block_marker,kpmask=kpmask)
+            else:
+                bm=get_blockmarker(H)
+
+            (e,),v=eigsh(H,which='SA',k=1)
+            v=bm.antiblockize(v)
+            v=v.reshape([-1,1])
+            v[abs(v)<ZERO_REF]=0
+
+            #e,v,bm,HH=eigbsh(H,tol=1e-12)
+            hgen.trunc(U=v,block_marker=bm,kpmask=ones(1,dtype='bool'))
             ML=[chorder(ai,target_order=order,old_order=[SITE,LLINK,RLINK]) for ai in evolutor.get_AL(dense=True)]
             return MPS(AL=ML,BL=[],S=ones(1),labels=labels)
         else:
@@ -491,10 +503,23 @@ class DMRGEngine(object):
             ops=self.hchain.query(0)
             ops=site_image(ops,0,nsite)
             H=hgen.expand(ops)
-            e,v,bm,HH=eigbsh(H,tol=1e-12)
+            #blockize HL0 and HR0
+            if self.bmg is not None:
+                if isinstance(hgen.evolutor,MaskedEvolutor):
+                    kpmask=hgen.evolutor.kpmask(hgen.N-2)
+                else:
+                    kpmask=None
+                bm=self.bmg.update_blockmarker(hgen.block_marker,kpmask=kpmask)
+            else:
+                bm=get_blockmarker(H)
+
+            (e,),v=eigsh(H,which='SA',k=1)
+            v=bm.antiblockize(v)
+            v=v.reshape([-1,1])
+            v[abs(v)<ZERO_REF]=0
+
+            #e,v,bm,HH=eigbsh(H,tol=1e-12)
             hgen.trunc(U=v,block_marker=bm,kpmask=ones(1,dtype='bool'))
             ML=[chorder(ai,target_order=order,old_order=[SITE,RLINK,LLINK]) for ai in hgen.evolutor.get_AL(dense=True)[::-1]]
             mps=MPS(AL=[],BL=ML,S=ones(1),labels=labels)
             return mps
-
-

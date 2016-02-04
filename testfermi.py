@@ -104,7 +104,7 @@ class TestFH(object):
         assert_almost_equal(Emin_exact,Emin2)
 
         #the solution through dmrg.
-        bmgen=get_bmgen(self.expander3.spaceconfig,'NM')
+        bmgen=get_bmgen(self.expander3.spaceconfig,'N')
         dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen)
         EG2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0)[-1]
         assert_almost_equal(Emin_exact,EG2*H_serial.nsite,decimal=4)
