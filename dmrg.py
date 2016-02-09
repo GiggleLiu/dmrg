@@ -212,7 +212,7 @@ class DMRGEngine(object):
         self.LPART={0:hgen}
         self.RPART={0:hgen}
 
-    def run_finite(self,endpoint=None,tol=0,maxN=20):
+    def run_finite(self,endpoint=None,tol=0,maxN=20,block_params={}):
         '''
         Run the application.
 
@@ -249,7 +249,7 @@ class DMRGEngine(object):
                     opi=filter(lambda op:all(array(op.siteindex)<=(hgen_l.N+hgen_r.N+1)),opi)
 
                     #run a step
-                    EG,U,kpmask,err=self.dmrg_step(hgen_l,hgen_r,opi,direction=direction,tol=tol,maxN=m)
+                    EG,U,kpmask,err=self.dmrg_step(hgen_l,hgen_r,opi,direction=direction,tol=tol,maxN=m,block_params=block_params)
                     #update LPART and RPART
                     if direction=='->':
                         self.set('l',hgen_l,i+1)
@@ -281,7 +281,7 @@ class DMRGEngine(object):
                         else:
                             EG_PRE=EG
 
-    def run_infinite(self,maxiter=50,tol=0,maxN=20):
+    def run_infinite(self,maxiter=50,tol=0,maxN=20,block_params={}):
         '''
         Run the application.
 
@@ -303,7 +303,7 @@ class DMRGEngine(object):
             t0=time.time()
             opi=unique(self.hchain.query(i)+self.hchain.query(i+1))
             opi=filter(lambda op:all(array(op.siteindex)<=(2*hgen.N+1)),opi)
-            EG,U,kpmask,err=self.dmrg_step(hgen,hgen,opi,tol=tol)
+            EG,U,kpmask,err=self.dmrg_step(hgen,hgen,opi,tol=tol,block_params=block_params)
             EG=EG/(2.*(i+1))
             if len(EL)>0:
                 diff=EG-EL[-1]
@@ -352,9 +352,6 @@ class DMRGEngine(object):
                 intraop_l.append(op)
             else:
                 interop.append(op)
-        #print 'LOP:',intraop_l
-        #print 'ROP',intraop_r
-        #print 'INTER',interop
         HL0=hgen_l.expand(intraop_l)
         if hgen_r is hgen_l:
             HR0=HL0
@@ -385,8 +382,21 @@ class DMRGEngine(object):
         #blockize and get the eigenvalues.
         #(e,),v=eigsh(H,which='SA',k=1)
         t1=time.time()
-        e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=1e-10,which='S',maxiter=5000)
-        v=bm_tot.antiblockize(v).toarray()
+        if self.bmg is None or target_block is None:
+            e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=tol,which='S',maxiter=5000)
+            v=bm_tot.antiblockize(v).toarray()
+        else:
+            bm_tot=self.bmg.add(bml,bmr)
+            H_bd=bm_tot.blockize(H)
+            Hc=bm_tot.lextract_block(H_bd,target_block)
+            if Hc.shape[0]<400:
+                e,v=eigh(Hc.toarray())
+            else:
+                e,v=eigsh(Hc,k=1,which='SA',maxiter=5000,tol=tol)
+            e,v=e[0],v[:,0]
+            bindex=bm_tot.labels.index(target_block)
+            v=sps.coo_matrix((v,(arange(bm_tot.Nr[bindex],bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128')
+            v=bm_tot.antiblockize(v).toarray()
         t2=time.time()
         v=v.reshape([ndiml,ndimr])
         v[abs(v)<ZERO_REF]=0
@@ -513,7 +523,11 @@ class DMRGEngine(object):
             else:
                 bm=get_blockmarker(H)
 
-            (e,),v=eigsh(H,which='SA',k=1)
+            if H.shape[0]<200:
+                e,v=eigh(H.toarray())
+                e,v=e[0],v[:,0]
+            else:
+                (e,),v=eigsh(H,which='SA',k=1)
             v=bm.antiblockize(v)
             v=v.reshape([-1,1])
             v[abs(v)<ZERO_REF]=0

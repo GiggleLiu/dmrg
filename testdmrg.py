@@ -170,13 +170,13 @@ class DMRGTest():
         hgen2=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=Evolutor(hndim=2))
         dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen1,tol=0)
         H=get_H(H=model.H_serial,hgen=hgen1)
-        H2,bm2=get_H_bm(H=model.H_serial,hgen=hgen2,bstr='Z')
+        H2,bm2=get_H_bm(H=model.H_serial,hgen=hgen2,bstr='M')
         Emin=eigsh(H,k=1)[0]
         Emin2=eigsh(bm2.lextract_block(H2,0.),k=1)[0]
         print 'The Ground State Energy is %s, tolerence %s.'%(Emin,Emin-Emin2)
         assert_almost_equal(Emin,Emin2)
 
+DMRGTest().test_lanczos()
 DMRGTest().test_vmps()
 DMRGTest().test_dmrg_finite()
 DMRGTest().test_dmrg_infinite()
-DMRGTest().test_lanczos()

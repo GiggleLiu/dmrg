@@ -96,7 +96,7 @@ class TestFH(object):
         #the solution through updates
         H_serial=op2collection(op=self.model_occ.hgen.get_opH())
         H=get_H(H=H_serial,hgen=self.expander)
-        H2,bm2=get_H_bm(H=H_serial,hgen=self.expander2,bstr='NM')
+        H2,bm2=get_H_bm(H=H_serial,hgen=self.expander2,bstr='QM')
         Emin=eigsh(H,k=1,which='SA')[0]
         Emin2=eigsh(H2,k=1,which='SA')[0]
         print 'The Ground State Energy is %s, tolerence %s.'%(Emin,Emin-Emin2)
@@ -104,7 +104,7 @@ class TestFH(object):
         assert_almost_equal(Emin_exact,Emin2)
 
         #the solution through dmrg.
-        bmgen=get_bmgen(self.expander3.spaceconfig,'N')
+        bmgen=get_bmgen(self.expander3.spaceconfig,'Q')
         dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen)
         EG2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0)[-1]
         assert_almost_equal(Emin_exact,EG2*H_serial.nsite,decimal=4)
