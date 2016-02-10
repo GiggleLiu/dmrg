@@ -13,7 +13,7 @@ from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker
 from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor
 
-ZERO_REF=1e-12
+ZERO_REF=1e-10
 
 __all__=['site_image','SuperBlock','DMRGEngine']
 
@@ -158,12 +158,14 @@ class DMRGEngine(object):
         :hgen: <RGHGen>, hamiltonian Generator.
         :bmg: <BlockMarkerGenerator>, the block marker generator.
         :tol: float, the tolerence, when maxN and tol are both set, we keep the lower dimension.
+        :symmetric: bool, True if left<->right symmetric, can be used to shortcut the run time.
     '''
-    def __init__(self,hchain,hgen,bmg=None,tol=0):
+    def __init__(self,hchain,hgen,bmg=None,tol=0,symmetric=False):
         self.hchain=hchain
         self.tol=tol
         self.hgen=hgen
         self.bmg=bmg
+        self.symmetric=symmetric
         self.reset()
 
     @property
@@ -182,7 +184,7 @@ class DMRGEngine(object):
             The length of block.
         '''
         assert(which=='l' or which=='r')
-        if which=='l':
+        if which=='l' or self.symmetric:
             return copy.deepcopy(self.LPART[length])
         else:
             return copy.deepcopy(self.RPART[length])
@@ -191,17 +193,17 @@ class DMRGEngine(object):
         '''
         Set the hamiltonian generator for specific part.
 
-        which:
-            `l` -> the left part.
-            `r` -> the right part.
-        hgen:
-            The hamiltonian generator.
-        length:
-            The length of block, if set, it will do a length check.
+        Parameters:
+            :which: str,
+
+                * `l` -> the left part.
+                * `r` -> the right part.
+            :hgen: <RGHGen>, the RG hamiltonian generator.
+            :length: int, the length of block, if set, it will do a length check.
         '''
         assert(length is None or length==hgen.N)
         assert(hgen.truncated)
-        if which=='l':
+        if which=='l' or self.symmetric:
             self.LPART[hgen.N]=hgen
         else:
             self.RPART[hgen.N]=hgen
@@ -216,12 +218,16 @@ class DMRGEngine(object):
         '''
         Run the application.
 
-        endpoint:
-            The end position tuple of (scan, direction, size of left-block).
-        tol:
-            The rolerence of energy.
-        maxN:
-            Maximum number of kept states and the tolerence for truncation weight.
+        Parameters:
+            :endpoint: tuple, the end position tuple of (scan, direction, size of left-block).
+            :tol: float, the rolerence of energy.
+            :maxN: int, maximum number of kept states and the tolerence for truncation weight.
+            :block_params: dict, the parameters for block specification, key words:
+
+                * target_block, the target block to evaluate the ground state energy.
+
+        Return:
+            list, the ground state energy of each scan.
         '''
         EL=[]
         hgen=copy.deepcopy(self.hgen)
