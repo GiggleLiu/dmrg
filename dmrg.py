@@ -159,12 +159,14 @@ class DMRGEngine(object):
         :bmg: <BlockMarkerGenerator>, the block marker generator.
         :tol: float, the tolerence, when maxN and tol are both set, we keep the lower dimension.
         :symmetric: bool, True if left<->right symmetric, can be used to shortcut the run time.
+        :_tail(private): list, the last item of A matrices, which is used to construct the <MPS>.
     '''
     def __init__(self,hchain,hgen,bmg=None,tol=0,symmetric=False):
         self.hchain=hchain
         self.tol=tol
         self.hgen=hgen
         self.bmg=bmg
+        self._tail=None
         self.symmetric=symmetric
         self.reset()
 
@@ -185,9 +187,11 @@ class DMRGEngine(object):
         '''
         assert(which=='l' or which=='r')
         if which=='l' or self.symmetric:
-            return copy.deepcopy(self.LPART[length])
+            #return copy.deepcopy(self.LPART[length])
+            return self.LPART[length].make_copy()
         else:
-            return copy.deepcopy(self.RPART[length])
+            #return copy.deepcopy(self.RPART[length])
+            return self.RPART[length].make_copy()
 
     def set(self,which,hgen,length=None):
         '''
@@ -255,7 +259,7 @@ class DMRGEngine(object):
                     opi=filter(lambda op:all(array(op.siteindex)<=(hgen_l.N+hgen_r.N+1)),opi)
 
                     #run a step
-                    EG,U,kpmask,err=self.dmrg_step(hgen_l,hgen_r,opi,direction=direction,tol=tol,maxN=m,block_params=block_params)
+                    EG,U,kpmask,err,phi=self.dmrg_step(hgen_l,hgen_r,opi,direction=direction,tol=tol,maxN=m,block_params=block_params)
                     #update LPART and RPART
                     if direction=='->':
                         self.set('l',hgen_l,i+1)
@@ -266,6 +270,12 @@ class DMRGEngine(object):
                     else:
                         print 'setting %s(%s)-site of right'%(nsite-i-1,hgen_r.N)
                         self.set('r',hgen_r,nsite-i-1)
+
+                    if direction=='->' and i==nsite-2:  #fix tails
+                        uu=U.tocsc()[:,kpmask]
+                        ai=array([a.toarray() for a in hgen_l.evolutor.A(i)])
+                        self._tail=einsum('ijk,jil->lk',ai.conj(),phi)  #A(osite,llink,rlink), phi(llink,osite,nsite)
+                        self._tail=[tail[:,newaxis] for tail in self._tail]
 
                     EG=EG/(hgen_l.N+hgen_r.N)
                     if len(EL)>0:
@@ -309,7 +319,7 @@ class DMRGEngine(object):
             t0=time.time()
             opi=unique(self.hchain.query(i)+self.hchain.query(i+1))
             opi=filter(lambda op:all(array(op.siteindex)<=(2*hgen.N+1)),opi)
-            EG,U,kpmask,err=self.dmrg_step(hgen,hgen,opi,tol=tol,block_params=block_params)
+            EG,U,kpmask,err,phi=self.dmrg_step(hgen,hgen,opi,tol=tol,block_params=block_params)
             EG=EG/(2.*(i+1))
             if len(EL)>0:
                 diff=EG-EL[-1]
@@ -437,7 +447,7 @@ class DMRGEngine(object):
             hgen_r.trunc(U=U,block_marker=bm,kpmask=kpmask)
         t3=time.time()
         print 'Elapse -> total:%s, eigen:%s'%(t3-t0,t2-t1)
-        return e,U,kpmask,trunc_error
+        return e,U,kpmask,trunc_error,phi.toarray().reshape([ndiml/hndim,hndim,ndimr])
 
     def direct_solve(self,n=None):
         '''
@@ -470,76 +480,19 @@ class DMRGEngine(object):
             print 'Iteration %s, EG = %s'%(i,EG/hgen.N)
         return EG/self.nsite
 
-    def get_mps(self,direction,labels=('s','a'),order=None):
+    def get_mps(self,labels=('s','a')):
         '''
         Transform <Evolutor> instance to <MPS> instance.
 
         Parameters:
-            :direction: str, the scan direction.
-
-                * '->', right scan.
-                * '<-', left scan.
             :labels: tuple of char,
                 (label_site,label_link), The labels for degree of freedom on site and intersite links.
-            :order: sequence of [SITE,RLINK,LLINK], the order of indices.
 
         Return:
             <MPS>, the desired matrix product state.
+
+            Note: this mps is right canonical.
         '''
-        assert(direction=='->' or direction=='<-')
-        nsite=self.nsite
-        if order is None:
-            order=NORMAL_ORDER
-        if direction=='->':
-            hgen=self.query('l',nsite-1)
-            opi=self.hchain.query(nsite-1)
-            H=hgen.expand(hgen,opi)
-
-            #blockize HL0 and HR0
-            if self.bmg is not None:
-                if isinstance(hgen.evolutor,MaskedEvolutor):
-                    kpmask=hgen.evolutor.kpmask(hgen.N-2)
-                else:
-                    kpmask=None
-                bm=self.bmg.update_blockmarker(hgen.block_marker,kpmask=kpmask)
-            else:
-                bm=get_blockmarker(H)
-
-            (e,),v=eigsh(H,which='SA',k=1)
-            v=bm.antiblockize(v)
-            v=v.reshape([-1,1])
-            v[abs(v)<ZERO_REF]=0
-
-            #e,v,bm,HH=eigbsh(H,tol=1e-12)
-            hgen.trunc(U=v,block_marker=bm,kpmask=ones(1,dtype='bool'))
-            ML=[chorder(ai,target_order=order,old_order=[SITE,LLINK,RLINK]) for ai in evolutor.get_AL(dense=True)]
-            return MPS(AL=ML,BL=[],S=ones(1),labels=labels)
-        else:
-            hgen=self.query('r',nsite-1)
-            ops=self.hchain.query(0)
-            ops=site_image(ops,0,nsite)
-            H=hgen.expand(ops)
-            #blockize HL0 and HR0
-            if self.bmg is not None:
-                if isinstance(hgen.evolutor,MaskedEvolutor):
-                    kpmask=hgen.evolutor.kpmask(hgen.N-2)
-                else:
-                    kpmask=None
-                bm=self.bmg.update_blockmarker(hgen.block_marker,kpmask=kpmask)
-            else:
-                bm=get_blockmarker(H)
-
-            if H.shape[0]<200:
-                e,v=eigh(H.toarray())
-                e,v=e[0],v[:,0]
-            else:
-                (e,),v=eigsh(H,which='SA',k=1)
-            v=bm.antiblockize(v)
-            v=v.reshape([-1,1])
-            v[abs(v)<ZERO_REF]=0
-
-            #e,v,bm,HH=eigbsh(H,tol=1e-12)
-            hgen.trunc(U=v,block_marker=bm,kpmask=ones(1,dtype='bool'))
-            ML=[chorder(ai,target_order=order,old_order=[SITE,RLINK,LLINK]) for ai in hgen.evolutor.get_AL(dense=True)[::-1]]
-            mps=MPS(AL=[],BL=ML,S=ones(1),labels=labels)
-            return mps
+        ML=[chorder(ai,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for ai in [self._tail]+hgen.evolutor.get_AL(dense=True)[::-1]]
+        mps=MPS(AL=[],BL=ML,S=ones(1),labels=labels)
+        return mps

@@ -176,7 +176,7 @@ class DMRGTest():
         print 'The Ground State Energy is %s, tolerence %s.'%(Emin,Emin-Emin2)
         assert_almost_equal(Emin,Emin2)
 
-DMRGTest().test_lanczos()
 DMRGTest().test_vmps()
+DMRGTest().test_lanczos()
 DMRGTest().test_dmrg_finite()
 DMRGTest().test_dmrg_infinite()
