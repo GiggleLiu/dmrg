@@ -133,7 +133,7 @@ class DMRGTest():
         dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen,tol=0)
         dmrgegn.run_finite(endpoint=(1,'<-',0),maxN=40,tol=1e-12)
         #hgen=dmrgegn.query('r',nsite-1)
-        mps=dmrgegn.get_mps(direction='<-')  #right normalized initial state
+        mps=dmrgegn.get_mps()  #right normalized initial state
         mps.save(filename)
 
         #run vmps

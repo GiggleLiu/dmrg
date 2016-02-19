@@ -238,7 +238,7 @@ class DMRGEngine(object):
         if isinstance(hgen.evolutor,NullEvolutor):
             raise ValueError('The evolutor must not be null!')
         nsite=self.hchain.nsite
-        if endpoint is None: endpoint=(5,'<-',nsite/2)
+        if endpoint is None: endpoint=(5,'->',nsite-2)
         maxscan,end_direction,end_site=endpoint
         if ndim(maxN)==0: maxN=[maxN]*maxscan
         assert(len(maxN)>=maxscan)
@@ -493,6 +493,7 @@ class DMRGEngine(object):
 
             Note: this mps is right canonical.
         '''
+        hgen=self.query('l',self.hchain.nsite-1)
         ML=[chorder(ai,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for ai in [self._tail]+hgen.evolutor.get_AL(dense=True)[::-1]]
         mps=MPS(AL=[],BL=ML,S=ones(1),labels=labels)
         return mps
