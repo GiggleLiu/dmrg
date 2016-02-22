@@ -402,6 +402,8 @@ class DMRGEngine(object):
             e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=tol,which='S',maxiter=5000)
             v=bm_tot.antiblockize(v).toarray()
         else:
+            if hasattr(target_block,'__call__'):
+                target_block=target_block(nsite=hgen_l.N+hgen_r.N)
             bm_tot=self.bmg.add(bml,bmr)
             H_bd=bm_tot.blockize(H)
             Hc=bm_tot.lextract_block(H_bd,target_block)
