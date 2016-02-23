@@ -159,14 +159,14 @@ class DMRGEngine(object):
         :bmg: <BlockMarkerGenerator>, the block marker generator.
         :tol: float, the tolerence, when maxN and tol are both set, we keep the lower dimension.
         :symmetric: bool, True if left<->right symmetric, can be used to shortcut the run time.
-        :_tail(private): list, the last item of A matrices, which is used to construct the <MPS>.
+        :_tails(private): list, the last item of A matrices, which is used to construct the <MPS>.
     '''
     def __init__(self,hchain,hgen,bmg=None,tol=0,symmetric=False):
         self.hchain=hchain
         self.tol=tol
         self.hgen=hgen
         self.bmg=bmg
-        self._tail=None
+        self._tails=None
         self.symmetric=symmetric
         self.reset()
 
@@ -259,7 +259,7 @@ class DMRGEngine(object):
                     opi=filter(lambda op:all(array(op.siteindex)<=(hgen_l.N+hgen_r.N+1)),opi)
 
                     #run a step
-                    EG,U,kpmask,err,phi=self.dmrg_step(hgen_l,hgen_r,opi,direction=direction,tol=tol,maxN=m,block_params=block_params)
+                    EG,U,kpmask,err,phil=self.dmrg_step(hgen_l,hgen_r,opi,direction=direction,tol=tol,maxN=m,block_params=block_params)
                     #update LPART and RPART
                     if direction=='->':
                         self.set('l',hgen_l,i+1)
@@ -274,8 +274,8 @@ class DMRGEngine(object):
                     if direction=='->' and i==nsite-2:  #fix tails
                         uu=U.tocsc()[:,kpmask]
                         ai=array([a.toarray() for a in hgen_l.evolutor.A(i)])
-                        self._tail=einsum('ijk,jil->lk',ai.conj(),phi)  #A(osite,llink,rlink), phi(llink,osite,nsite)
-                        self._tail=[tail[:,newaxis] for tail in self._tail]
+                        self._tails=[einsum('ijk,jil->lk',ai.conj(),phi) for phi in phil]  #A(osite,llink,rlink), phi(llink,osite,nsite)
+                        self._tails=[[A[:,newaxis] for A in tail] for tail in self._tails]
 
                     EG=EG/(hgen_l.N+hgen_r.N)
                     if len(EL)>0:
@@ -283,15 +283,15 @@ class DMRGEngine(object):
                     else:
                         diff=Inf
                     t1=time.time()
-                    print 'EG = %.10f, dE = %.2e, Elapse -> %.4f(D=%s), TruncError -> %.2e'%(EG,diff,t1-t0,hgen.ndim,err)
+                    print 'EG = %s, dE = %s, Elapse -> %.4f(D=%s), TruncError -> %s'%(EG,diff,t1-t0,hgen.ndim,err)
                     EL.append(EG)
                     if i==end_site and direction==end_direction:
                         diff=EG-EG_PRE
-                        print 'MidPoint -> EG = %.10f, dE = %.2e'%(EG,diff)
+                        print 'MidPoint -> EG = %s, dE = %s'%(EG,diff)
                         if n==maxscan-1:
                             print 'Breaking due to maximum scan reached!'
                             return EL
-                        elif abs(diff)<tol:
+                        elif all(abs(diff)<tol):
                             print 'Breaking due to enough precision reached!'
                             return EL
                         else:
@@ -319,7 +319,7 @@ class DMRGEngine(object):
             t0=time.time()
             opi=unique(self.hchain.query(i)+self.hchain.query(i+1))
             opi=filter(lambda op:all(array(op.siteindex)<=(2*hgen.N+1)),opi)
-            EG,U,kpmask,err,phi=self.dmrg_step(hgen,hgen,opi,tol=tol,block_params=block_params)
+            EG,U,kpmask,err,phil=self.dmrg_step(hgen,hgen,opi,tol=tol,block_params=block_params)
             EG=EG/(2.*(i+1))
             if len(EL)>0:
                 diff=EG-EL[-1]
@@ -376,6 +376,7 @@ class DMRGEngine(object):
         #blockize HL0 and HR0
         if self.bmg is not None:
             target_block=block_params.get('target_block')
+            nlevel=block_params.get('nlevel',1)
             n=max(hgen_l.N,hgen_r.N)
             if isinstance(hgen_l.evolutor,MaskedEvolutor) and n>1:
                 kpmask_l=hgen_l.evolutor.kpmask(hgen_l.N-2)
@@ -409,25 +410,33 @@ class DMRGEngine(object):
             Hc=bm_tot.lextract_block(H_bd,target_block)
             if Hc.shape[0]<400:
                 e,v=eigh(Hc.toarray())
+                e,v=e[:nlevel],v[:,:nlevel]
             else:
-                e,v=eigsh(Hc,k=1,which='SA',maxiter=5000,tol=tol)
-            e,v=e[0],v[:,0]
+                e,v=eigsh(Hc,k=nlevel,which='SA',maxiter=5000,tol=tol)
+                order=argsort(e)
+                e,v=e[order],v[:,order]
             bindex=bm_tot.labels.index(target_block)
-            v=sps.coo_matrix((v,(arange(bm_tot.Nr[bindex],bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128')
-            v=bm_tot.antiblockize(v).toarray()
+            vl=[bm_tot.antiblockize(sps.coo_matrix((v[:,i],(arange(bm_tot.Nr[bindex],\
+                    bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128')).toarray()\
+                    for i in xrange(nlevel)]
         t2=time.time()
-        v=v.reshape([ndiml,ndimr])
-        v[abs(v)<ZERO_REF]=0
+        vl=[v.reshape([ndiml,ndimr]) for v in vl]
+        for v in vl:
+            v[abs(v)<ZERO_REF]=0
+        rho=0
+        phil=[]
         if direction=='->':
-            phi=sps.csr_matrix(v)
-            rho=phi.dot(phi.T.conj())
+            for v in vl:
+                phi=sps.csr_matrix(v)
+                rho=rho+phi.dot(phi.T.conj())
+                phil.append(phi)
             bm=bml
         else:
-            phi=sps.csc_matrix(v)
-            rho=phi.T.dot(phi.conj())
+            for v in vl:
+                phi=sps.csc_matrix(v)
+                rho=rho+phi.T.dot(phi.conj())
+                phil.append(phi)
             bm=bmr
-        #if self.bmg is None:
-        #    spec,U,bm,rho_b=eigbh(rho)
         rho=bm.blockize(rho)
         if not bm.check_blockdiag(rho,tol=1e-5):
             ion()
@@ -449,7 +458,8 @@ class DMRGEngine(object):
             hgen_r.trunc(U=U,block_marker=bm,kpmask=kpmask)
         t3=time.time()
         print 'Elapse -> total:%s, eigen:%s'%(t3-t0,t2-t1)
-        return e,U,kpmask,trunc_error,phi.toarray().reshape([ndiml/hndim,hndim,ndimr])
+        phil=[phi.toarray().reshape([ndiml/hndim,hndim,ndimr]) for phi in phil]
+        return e,U,kpmask,trunc_error,phil
 
     def direct_solve(self,n=None):
         '''
@@ -482,13 +492,14 @@ class DMRGEngine(object):
             print 'Iteration %s, EG = %s'%(i,EG/hgen.N)
         return EG/self.nsite
 
-    def get_mps(self,labels=('s','a')):
+    def get_mps(self,labels=('s','a'),target_level=0):
         '''
         Transform <Evolutor> instance to <MPS> instance.
 
         Parameters:
             :labels: tuple of char,
                 (label_site,label_link), The labels for degree of freedom on site and intersite links.
+            :target_level: int, the n-th lowest level, 0 for ground state.
 
         Return:
             <MPS>, the desired matrix product state.
@@ -496,6 +507,7 @@ class DMRGEngine(object):
             Note: this mps is right canonical.
         '''
         hgen=self.query('l',self.hchain.nsite-1)
-        ML=[chorder(ai,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for ai in [self._tail]+hgen.evolutor.get_AL(dense=True)[::-1]]
+        tail=self._tails[target_level]
+        ML=[chorder(ai,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for ai in [tail]+hgen.evolutor.get_AL(dense=True)[::-1]]
         mps=MPS(AL=[],BL=ML,S=ones(1),labels=labels)
         return mps
