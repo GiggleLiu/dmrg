@@ -11,7 +11,7 @@ import copy,time,pdb,warnings
 
 from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker
 from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString
-from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor
+from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
 
 ZERO_REF=1e-10
 
@@ -95,12 +95,12 @@ class SuperBlock(object):
         if ouA.fermionic:
             assert(sgnr is not None)
             sgn=Z4scfg(scfg)
-            mA=sps.kron(sps.identity(self.hl.ndim/scfg.hndim),sps.csr_matrix(ouA.get_data()).dot(sgn))
-            mB=sps.kron(sps.diags(sgnr,0),sps.csr_matrix(ouB.get_data()))
+            mA=kron(sps.identity(self.hl.ndim/scfg.hndim),sps.csr_matrix(ouA.get_data()).dot(sgn))
+            mB=kron(sps.diags(sgnr,0),sps.csr_matrix(ouB.get_data()))
         else:
-            mA=sps.kron(sps.identity(self.hl.ndim/scfg.hndim),sps.csr_matrix(ouA.data))
-            mB=sps.kron(sps.identity(self.hl.ndim/scfg.hndim),sps.csr_matrix(ouB.data))
-        op=sps.kron(mA,mB)
+            mA=kron(sps.identity(self.hl.ndim/scfg.hndim),sps.csr_matrix(ouA.data))
+            mB=kron(sps.identity(self.hl.ndim/scfg.hndim),sps.csr_matrix(ouB.data))
+        op=kron(mA,mB)
         return op
 
     def get_op(self,opstring):
@@ -147,7 +147,7 @@ class SuperBlock(object):
             opr=self.hr.get_newop(opstr)
         else:
             opr=sps.identity(self.hr.ndim)
-        return sps.kron(opl,opr)
+        return kron(opl,opr)
 
 class DMRGEngine(object):
     '''
@@ -389,7 +389,7 @@ class DMRGEngine(object):
             bml=get_blockmarker(HL0)
             bmr=get_blockmarker(HR0)
 
-        H=sps.kron(HL0,sps.identity(ndimr))+sps.kron(sps.identity(ndiml),HR0)
+        H=kron(HL0,sps.identity(ndimr))+kron(sps.identity(ndiml),HR0)
         sb=SuperBlock(hgen_l,hgen_r)
         Hin=[]
         for op in interop:
