@@ -400,7 +400,7 @@ class DMRGEngine(object):
         #(e,),v=eigsh(H,which='SA',k=1)
         t1=time.time()
         if self.bmg is None or target_block is None:
-            e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=tol,which='S',maxiter=5000)
+            e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=tol*1e-2,which='S',maxiter=5000)
             v=bm_tot.antiblockize(v).toarray()
         else:
             if hasattr(target_block,'__call__'):
@@ -412,7 +412,11 @@ class DMRGEngine(object):
                 e,v=eigh(Hc.toarray())
                 e,v=e[:nlevel],v[:,:nlevel]
             else:
-                e,v=eigsh(Hc,k=nlevel,which='SA',maxiter=5000,tol=tol)
+                try:
+                    e,v=eigsh(Hc,k=nlevel,which='SA',maxiter=5000,tol=tol*1e-2)
+                except:
+                    e,v=eigsh(Hc,k=nlevel+1,which='SA',maxiter=5000,tol=tol)
+                    e,v=e[:nlevel],v[:,:nlevel]
                 order=argsort(e)
                 e,v=e[order],v[:,order]
             bindex=bm_tot.labels.index(target_block)
@@ -449,7 +453,7 @@ class DMRGEngine(object):
 
         kpmask=zeros(U.shape[1],dtype='bool')
         spec_cut=sort(spec)[max(0,len(kpmask)-maxN)]
-        kpmask[(spec>=spec_cut)&(spec>tol)]=True
+        kpmask[(spec>=spec_cut)&(spec>tol*1e-2)]=True
         print '%s states kept.'%sum(kpmask)
         trunc_error=sum(spec[~kpmask])
         if direction=='->':
@@ -508,6 +512,8 @@ class DMRGEngine(object):
         '''
         hgen=self.query('l',self.hchain.nsite-1)
         tail=self._tails[target_level]
-        ML=[chorder(ai,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for ai in [tail]+hgen.evolutor.get_AL(dense=True)[::-1]]
-        mps=MPS(AL=[],BL=ML,S=ones(1),labels=labels)
+        #ML=[chorder(ai,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for ai in [tail]+hgen.evolutor.get_AL(dense=True)[::-1]]
+        #mps=MPS(AL=[],BL=ML,S=ones(1),labels=labels)
+        ML=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]) for ai in hgen.evolutor.get_AL(dense=True)+[tail]]
+        mps=MPS(AL=ML,BL=[],S=ones(1),labels=labels)
         return mps
