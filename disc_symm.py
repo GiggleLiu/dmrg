@@ -3,6 +3,8 @@ Discrete symmetries.
 '''
 
 from numpy import *
+from scipy import sparse as sps
+import pdb
 
 from rglib.mps import OpUnit
 
@@ -14,11 +16,21 @@ class DiscSymm(object):
 
     Attributes:
         :name: str, the name of this symmetrc.
-        :val: number, the operation matrix of this symmetrc.
+        :proj: number, the projection matrices.
     '''
-    def __init__(self,name,val=None):
+    def __init__(self,name,proj=None):
         self.name=name
-        self.val=val
+        self._proj=proj
+
+    def get_projector(self,parity=None):
+        '''
+        get the specific projector.
+        '''
+        assert(parity in [1,-1,None])
+        if parity is None:
+            return self._proj
+        else:
+            return 0.5*(sps.identity(self._proj.shape[0])+parity*self._proj)
 
     def act_on_state(self,phi):
         '''
@@ -30,12 +42,25 @@ class DiscSymm(object):
         Return:
             1D array, the state after parity action.
         '''
-        return self.val.dot(phi)
-        #raise NotImplementedError()
+        P=self.get_projector()
+        return P.dot(phi)
+
+    def act_on_op(self,op):
+        '''
+        Act on the specific operator.
+
+        Parameters:
+            :op: matrix, the operator.
+
+        Return:
+            matrix, the operator after parity action.
+        '''
+        P=self.get_projector().tocsr()
+        return P.dot(op).dot(P.T.conj())
 
     def project_state(self,phi,parity,**kwargs):
         '''
-        symmetrize a state.
+        project out the specific parity from a state.
 
         Parameters:
             :phi: 1D array, the state vector.
@@ -45,8 +70,33 @@ class DiscSymm(object):
             1D array, the state after projection.
         '''
         assert(parity==1 or parity==-1)
-        phi2=self.act_on_state(phi,**kwargs)
-        return (phi+parity*phi2)/2.
+        P=self.get_projector(parity).tocsr()
+        return P.dot(phi)
+
+    def project_op(self,op,parity,**kwargs):
+        '''
+        project out the specific parity from an operator.
+
+        Parameters:
+            :op: matrix, the operator.
+            :parity: 1/-1, the specific parity.
+
+        Return:
+            matrix, the operator after project action.
+        '''
+        assert(parity==1 or parity==-1)
+        P=self.get_projector(parity).tocsr()
+        return P.dot(op.tocsc()).dot(P.T.conj())
+
+    def check_op(self,op):
+        '''
+        Check a specific op if it do obey this symmetry.
+        '''
+        P=self.get_projector().tocsr()
+        nop=P.dot(op.tocsc()).dot(P.T.conj())
+        diff=(nop-op).data
+        print diff
+        return allclose(diff,0)
 
     def check_parity(self,phi,**kwargs):
         '''
@@ -64,12 +114,18 @@ class DiscSymm(object):
             comps.append(comp.dot(phi.conj()))
         return comps
 
+    def update(self,**kwargs):
+        '''
+        Update this symmetry projection operator.
+        '''
+        raise NotImplementedError()
+
 class PHSymm(DiscSymm):
     '''
     Particle hole symmetry.
     '''
-    def __init__(self,val=None):
-        super(PHSymm,self).__init__('ph',val)
+    def __init__(self,proj=None):
+        super(PHSymm,self).__init__('ph',proj)
 
     def J(self,i):
         '''
@@ -78,7 +134,7 @@ class PHSymm(DiscSymm):
         Parameters:
             :i: int, the site index.
         '''
-        data=zeros([4,4])
+        data=zeros([4,4],dtype='int32')
         data[0,3]=-1
         data[3,0]=1
         data[1,1]=(-1)**i
@@ -90,8 +146,8 @@ class FlipSymm(DiscSymm):
     '''
     Spin flip symmetry.
     '''
-    def __init__(self,val=None):
-        super(FlipSymm,self).__init__('sf',val)
+    def __init__(self,proj=None):
+        super(FlipSymm,self).__init__('sf',proj)
 
     def P(self,i):
         '''
@@ -100,7 +156,7 @@ class FlipSymm(DiscSymm):
         Parameters:
             :i: int, the site index.
         '''
-        data=zeros([4,4])
+        data=zeros([4,4],dtype='int32')
         data[0,0]=1
         data[3,3]=-1
         data[1,2]=1
@@ -112,22 +168,18 @@ class C2Symm(DiscSymm):
     '''
     space left-right reflection symmetry.
     '''
-    def __init__(self,val=None):
-        super(C2Symm,self).__init__('c2',val)
+    def __init__(self,proj=None):
+        super(C2Symm,self).__init__('c2',proj)
 
-    def act_on_state(self,phi,nl,nr,**kwargs):
+    def update(self,nl,nr,**kwargs):
         '''
-        Assuming B.B. Hilbert space configuration.
-
-        Parameters:
-            :phi: 1D array, the state.
-            :nl/nr: int, the number of electrons in left and right blocks.
-
-        Return:
-            1D array, the new state after C2 action.
+        update the projection matrix.
         '''
-        N=sqrt(len(phi))
-        phi=phi.reshape([N,N])
-        factor=(-1)**((nl[:,newaxis]*nr)%2)
-        phi2=(phi*factor).T.ravel()
-        return phi2
+        NL=len(nl)
+        NR=len(nr)
+        assert(NL==NR)
+        yindices=arange(NL*NR)
+        xindices=NL*(yindices%NR)+yindices/NR
+        factor=(-1)**((nl[:,newaxis]*nr)%2).ravel()
+        self._proj=sps.coo_matrix((factor,(xindices,yindices)),shape=(NL*NR,NL*NR),dtype='int32')
+

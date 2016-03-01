@@ -4,7 +4,7 @@ DMRG Engine.
 
 from numpy import *
 from scipy.sparse.linalg import eigsh
-from scipy.linalg import eigh
+from scipy.linalg import eigh,norm
 from matplotlib.pyplot import *
 import scipy.sparse as sps
 import copy,time,pdb,warnings
@@ -247,7 +247,7 @@ class DMRGEngine(object):
             else:
                 raise ValueError('Unknow symmetry %s'%symm)
 
-    def project_disc_symmetry(self,phi,target_sector,**kwargs):
+    def project_state(self,phi,target_sector,**kwargs):
         '''
         project phi into specific discrete symmtry space.
 
@@ -263,11 +263,29 @@ class DMRGEngine(object):
         phi0=phi
         for symm in target_sector.keys():
             handler=self._disc_symm_cores[symm]
-            comps=handler.check_parity(phi,**kwargs)
-            phi=handler.project_state(phi,parity=target_sector[symm],**kwargs)
-            print comps
-            pdb.set_trace()
+            handler.update(**kwargs)
+            phi=handler.project_state(phi,parity=target_sector[symm])
+            #comps=handler.check_parity(phi)
         return phi
+
+    def project_hamiltonian(self,H,target_sector,**kwargs):
+        '''
+        project hamiltonian into specific discrete symmtry space.
+
+        Parameters:
+            :H: matrix, the hamiltonian.
+            :target_sector: dict, with values the parity 1/-1 for specific symmetry.
+
+            kwargs, 'nl/nr' for 'C' parity.
+
+        Return:
+            matrix, the hamiltonian after projection.
+        '''
+        for symm in target_sector.keys():
+            handler=self._disc_symm_cores[symm]
+            handler.update(**kwargs)
+            H=handler.project_op(H,parity=target_sector[symm],**kwargs)
+        return H
 
     def run_finite(self,endpoint=None,tol=0,maxN=20,block_params={}):
         '''
@@ -450,11 +468,13 @@ class DMRGEngine(object):
         #blockize and get the eigenvalues.
         #(e,),v=eigsh(H,which='SA',k=1)
         t1=time.time()
-        target_sector=block_params.get('target_sector',{})
+        target_sector=dict(block_params.get('target_sector',{}))
         if hgen_l.N!=hgen_r.N and target_sector.has_key('C'):  #forbidden using C2 symmetry at NL!=NR
             del(target_sector['C'])
-        v0=self.project_disc_symmetry(phi=random.random(H.shape[0]),target_sector=target_sector,\
-                nl=int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2,nr=int32(1-signlib.get_sign_from_bm(bmr,diag_only=True))/2)
+        nl=int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2
+        nr=int32(1-signlib.get_sign_from_bm(bmr,diag_only=True))/2
+        v00=self.project_state(phi=random.random(H.shape[0]),target_sector=target_sector,nl=nl,nr=nr)
+        #H=self.project_hamiltonian(H=H,target_sector=target_sector,nl=nl,nr=nr)
         if self.bmg is None or target_block is None:
             e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=tol*1e-2,which='S',maxiter=5000)
             v=bm_tot.antiblockize(v).toarray()
@@ -465,15 +485,15 @@ class DMRGEngine(object):
             bm_tot=self.bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
             H_bd=bm_tot.blockize(H)
             Hc=bm_tot.lextract_block(H_bd,target_block)
-            v0=bm_tot.lextract_block(v0,target_block)
+            v0=bm_tot.lextract_block(v00,target_block)
             if Hc.shape[0]<400:
                 e,v=eigh(Hc.toarray())
                 e,v=e[:nlevel],v[:,:nlevel]
             else:
                 try:
-                    e,v=eigsh(Hc,k=nlevel,which='SA',maxiter=5000,tol=tol*1e-2)#,v0=v0)
+                    e,v=eigsh(Hc,k=nlevel,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0)
                 except:
-                    e,v=eigsh(Hc,k=nlevel+1,which='SA',maxiter=5000,tol=tol)#,v0=v0)
+                    e,v=eigsh(Hc,k=nlevel+1,which='SA',maxiter=5000,tol=tol,v0=v0)
                     e,v=e[:nlevel],v[:,:nlevel]
                 order=argsort(e)
                 e,v=e[order],v[:,order]
@@ -481,6 +501,12 @@ class DMRGEngine(object):
             vl=[bm_tot.antiblockize(sps.coo_matrix((v[:,i],(arange(bm_tot.Nr[bindex],\
                     bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128')).toarray()\
                     for i in xrange(nlevel)]
+            if hgen_r.N==hgen_l.N:
+                comps0=self._disc_symm_cores['C'].check_parity(v00)
+                comps=self._disc_symm_cores['C'].check_parity(vl[0][:,0])
+                print self._disc_symm_cores['C'].check_op(H)
+                print comps0,comps
+                pdb.set_trace()
         t2=time.time()
         vl=[v.reshape([ndiml,ndimr]) for v in vl]
         for v in vl:
