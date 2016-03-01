@@ -18,18 +18,18 @@ from lanczos import get_H,get_H_bm
 from blockmatrix import get_bmgen
 from dmrg import *
 
-class Chain6(object):
-    '''This is a tight-binding model for a chain with 6 sites.'''
-    def __init__(self,t,t2=0,U=0,mu=0.,occ=True):
+class ChainN(object):
+    '''This is a tight-binding model for a chain.'''
+    def __init__(self,t,t2=0,U=0,mu=0.,occ=True,nsite=6):
         self.t,self.t2,self.U,self.mu=t,t2,U,mu
         self.occ=occ
-        nsite=6
+        self.nsite=nsite
 
         #occupation representation will use <SuperSpaceConfig>, otherwise <SpaceConfig>.
         if self.occ:
-            spaceconfig=SuperSpaceConfig([1,2,6,1])
+            spaceconfig=SuperSpaceConfig([1,2,nsite,1])
         else:
-            spaceconfig=SpaceConfig([1,2,6,1],kspace=False)
+            spaceconfig=SpaceConfig([1,2,nsite,1],kspace=False)
             if abs(U)>0: warnings.warn('U is ignored in non-occupation representation.')
         hgen=RHGenerator(spaceconfig=spaceconfig)
 
@@ -70,16 +70,28 @@ class TestFH(object):
     def __init__(self):
         self.set_params()
 
-    def set_params(self,U=0.,t=1.,mu=0.1,t2=0.):
+    def set_params(self,U=0.,t=1.,mu=0.1,t2=0.,nsite=6):
         '''Set the parameters.'''
         self.t,self.U,self.t2,self.mu=t,U,t2,mu
-        self.model_exact=Chain6(t=t,U=U,t2=t2,mu=mu,occ=False)
-        self.model_occ=Chain6(t=t,U=U,t2=t2,mu=mu,occ=True)
+        self.model_exact=ChainN(t=t,U=U,t2=t2,mu=mu,occ=False,nsite=nsite)
+        self.model_occ=ChainN(t=t,U=U,t2=t2,mu=mu,occ=True,nsite=nsite)
         scfg=self.model_occ.hgen.spaceconfig
         spaceconfig=SuperSpaceConfig([scfg.nspin,1,scfg.norbit])
         self.expander=FermionHGen(spaceconfig=spaceconfig,evolutor=NullEvolutor(hndim=spaceconfig.hndim))
         self.expander2=FermionHGen(spaceconfig=spaceconfig,evolutor=Evolutor(hndim=spaceconfig.hndim))
         self.expander3=FermionHGen(spaceconfig=spaceconfig,evolutor=MaskedEvolutor(hndim=spaceconfig.hndim))
+
+    def test_disc_symm(self,nsite=40):
+        '''
+        The parameters are adapted from PRB 54. 7598
+        '''
+        self.set_params(U=4.,t=1.,mu=0.,t2=0.,nsite=nsite)
+        H_serial=op2collection(op=self.model_occ.hgen.get_opH())
+        bmgen=get_bmgen(self.expander3.spaceconfig,'QM')
+        dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen,symmetric=False,disc_symm='C')
+        EG2=dmrgegn.run_finite(endpoint=(4,'->',nsite-2),maxN=[10,20,30,40,40],tol=0,block_params={'target_block':(0,0),'target_sector':{'C':-1}})[-1]
+        print EG2*nsite
+        pdb.set_trace()
 
     def test_nonint(self):
         #get the exact solution.
@@ -110,6 +122,7 @@ class TestFH(object):
         assert_almost_equal(Emin_exact,EG2*H_serial.nsite,decimal=4)
 
     def test_all(self):
+        self.test_disc_symm()
         self.test_nonint()
 
 TestFH().test_all()

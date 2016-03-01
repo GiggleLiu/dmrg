@@ -12,6 +12,8 @@ import copy,time,pdb,warnings
 from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker
 from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
+from rglib.hexpand import signlib
+from disc_symm import *
 
 ZERO_REF=1e-10
 
@@ -159,21 +161,39 @@ class DMRGEngine(object):
         :bmg: <BlockMarkerGenerator>, the block marker generator.
         :tol: float, the tolerence, when maxN and tol are both set, we keep the lower dimension.
         :symmetric: bool, True if left<->right symmetric, can be used to shortcut the run time.
+        :disc_symm: str, the discrete symmetries used in this engine,
+        
+            * 'C', C2 space reflection symmetry.
+            * 'J', Particle hole symmetry.
+            * 'P', Spin flip symmetry.
+            e.g. 'CJ' for using both `C2` and particle hole symmetries.
+        :LPART/RPART: dict, the left/right scanning of hamiltonian generators.
         :_tails(private): list, the last item of A matrices, which is used to construct the <MPS>.
+        :_disc_symm_cores: dict, with keys 'C','P','J' and values the symmetry handlers.
     '''
-    def __init__(self,hchain,hgen,bmg=None,tol=0,symmetric=False):
+    def __init__(self,hchain,hgen,bmg=None,tol=0,symmetric=False,disc_symm=''):
         self.hchain=hchain
         self.tol=tol
         self.hgen=hgen
         self.bmg=bmg
-        self._tails=None
         self.symmetric=symmetric
+
+        #claim attributes with dummy values.
+        self._tails=None
+        self.LPART=None
+        self.RPART=None
+        self._disc_symm_cores=dict(zip(disc_symm,[None]*len(disc_symm)))
         self.reset()
 
     @property
     def nsite(self):
         '''Number of sites'''
         return self.hchain.nsite
+
+    @property
+    def disc_symm(self):
+        '''The discrete symmetries used in this dmrg handler.'''
+        return self._disc_symm_cores.keys()
 
     def query(self,which,length):
         '''
@@ -217,6 +237,37 @@ class DMRGEngine(object):
         hgen=copy.deepcopy(self.hgen)
         self.LPART={0:hgen}
         self.RPART={0:hgen}
+        for symm in self.disc_symm:
+            if symm=='C':
+                self._disc_symm_cores['C']=C2Symm()
+            elif symm=='P':
+                self._disc_symm_cores['P']=FlipSymm()
+            elif symm=='J':
+                self._disc_symm_cores['J']=PHSymm()
+            else:
+                raise ValueError('Unknow symmetry %s'%symm)
+
+    def project_disc_symmetry(self,phi,target_sector,**kwargs):
+        '''
+        project phi into specific discrete symmtry space.
+
+        Parameters:
+            :phi: 1D array, the state vector.
+            :target_sector: dict, with values the parity 1/-1 for specific symmetry.
+
+            kwargs, 'nl/nr' for 'C' parity.
+
+        Return:
+            1D array, the state after projection.
+        '''
+        phi0=phi
+        for symm in target_sector.keys():
+            handler=self._disc_symm_cores[symm]
+            comps=handler.check_parity(phi,**kwargs)
+            phi=handler.project_state(phi,parity=target_sector[symm],**kwargs)
+            print comps
+            pdb.set_trace()
+        return phi
 
     def run_finite(self,endpoint=None,tol=0,maxN=20,block_params={}):
         '''
@@ -383,8 +434,8 @@ class DMRGEngine(object):
                 kpmask_r=hgen_r.evolutor.kpmask(hgen_r.N-2)
             else:
                 kpmask_l=kpmask_r=None
-            bml=self.bmg.update_blockmarker(hgen_l.block_marker,kpmask=kpmask_l)
-            bmr=self.bmg.update_blockmarker(hgen_r.block_marker,kpmask=kpmask_r)
+            bml=self.bmg.update_blockmarker(hgen_l.block_marker,kpmask=kpmask_l,nsite=hgen_l.N)
+            bmr=self.bmg.update_blockmarker(hgen_r.block_marker,kpmask=kpmask_r,nsite=hgen_r.N)
         else:
             bml=get_blockmarker(HL0)
             bmr=get_blockmarker(HR0)
@@ -399,23 +450,30 @@ class DMRGEngine(object):
         #blockize and get the eigenvalues.
         #(e,),v=eigsh(H,which='SA',k=1)
         t1=time.time()
+        target_sector=block_params.get('target_sector',{})
+        if hgen_l.N!=hgen_r.N and target_sector.has_key('C'):  #forbidden using C2 symmetry at NL!=NR
+            del(target_sector['C'])
+        v0=self.project_disc_symmetry(phi=random.random(H.shape[0]),target_sector=target_sector,\
+                nl=int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2,nr=int32(1-signlib.get_sign_from_bm(bmr,diag_only=True))/2)
         if self.bmg is None or target_block is None:
             e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=tol*1e-2,which='S',maxiter=5000)
             v=bm_tot.antiblockize(v).toarray()
+            vl=[v]
         else:
             if hasattr(target_block,'__call__'):
                 target_block=target_block(nsite=hgen_l.N+hgen_r.N)
-            bm_tot=self.bmg.add(bml,bmr)
+            bm_tot=self.bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
             H_bd=bm_tot.blockize(H)
             Hc=bm_tot.lextract_block(H_bd,target_block)
+            v0=bm_tot.lextract_block(v0,target_block)
             if Hc.shape[0]<400:
                 e,v=eigh(Hc.toarray())
                 e,v=e[:nlevel],v[:,:nlevel]
             else:
                 try:
-                    e,v=eigsh(Hc,k=nlevel,which='SA',maxiter=5000,tol=tol*1e-2)
+                    e,v=eigsh(Hc,k=nlevel,which='SA',maxiter=5000,tol=tol*1e-2)#,v0=v0)
                 except:
-                    e,v=eigsh(Hc,k=nlevel+1,which='SA',maxiter=5000,tol=tol)
+                    e,v=eigsh(Hc,k=nlevel+1,which='SA',maxiter=5000,tol=tol)#,v0=v0)
                     e,v=e[:nlevel],v[:,:nlevel]
                 order=argsort(e)
                 e,v=e[order],v[:,order]
