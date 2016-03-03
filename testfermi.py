@@ -89,7 +89,7 @@ class TestFH(object):
         H_serial=op2collection(op=self.model_occ.hgen.get_opH())
         bmgen=get_bmgen(self.expander3.spaceconfig,'QM')
         dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen,symmetric=True,disc_symm='C')
-        EG2=dmrgegn.run_finite(endpoint=(4,'->',nsite-2),maxN=[10,20,30,40,40],tol=0,block_params={'target_block':(0,0),'target_sector':{'C':-1}})[-1]
+        EG2=dmrgegn.run_finite(endpoint=(4,'->',nsite-2),maxN=[10,40,100,100,40],tol=0,block_params={'target_block':(0,0),'target_sector':{'C':-1}})[-1]
         print EG2*nsite
         pdb.set_trace()
 
@@ -122,7 +122,7 @@ class TestFH(object):
         assert_almost_equal(Emin_exact,EG2*H_serial.nsite,decimal=4)
 
     def test_all(self):
-        self.test_disc_symm(40)
+        self.test_disc_symm(20)
         self.test_nonint()
 
 TestFH().test_all()

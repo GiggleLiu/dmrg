@@ -7,6 +7,7 @@ from scipy import sparse as sps
 import pdb
 
 from rglib.mps import OpUnit
+from tba.lattice import ind2c,c2ind
 
 __all__=['DiscSymm','PHSymm','FlipSymm','C2Symm']
 
@@ -93,10 +94,12 @@ class DiscSymm(object):
         Check a specific op if it do obey this symmetry.
         '''
         P=self.get_projector().tocsr()
-        nop=P.dot(op.tocsc()).dot(P.T.conj())
-        diff=(nop-op).data
+        diff=(P.dot(op.tocsc())-op.tocsr().dot(P.tocsc())).data
         print diff
-        return allclose(diff,0)
+        res=allclose(diff,0)
+        if not res:
+            pdb.set_trace()
+        return res
 
     def check_parity(self,phi,**kwargs):
         '''
@@ -171,15 +174,40 @@ class C2Symm(DiscSymm):
     def __init__(self,proj=None):
         super(C2Symm,self).__init__('c2',proj)
 
+    def update(self,nl0,nr0,n1,**kwargs):
+        '''
+        update the projection matrix.
+        '''
+        nr=nl=(nl0[:,newaxis]+n1).ravel()
+        assert(len(nl0)==len(nr0))
+        N0,N1=len(nl0),len(n1)
+        N=(N0*N1)**2
+        #base=array([N0,N1,N0,N1])
+        base=array([N0*N1,N0*N1])
+        yindices=arange(N)
+        yconfig=ind2c(yindices,base)
+        #xconfig=yconfig[:,array([2,3,0,1])]
+        xconfig=yconfig[:,array([1,0])]
+        #signs=(-1)**(((nl0[yconfig[:,0]]+n1[yconfig[:,1]])*(nr0[yconfig[:,2]]+n1[yconfig[:,3]]))%2)
+        signs=(-1)**((nl[yconfig[:,0]]*nr[yconfig[:,1]])%2)
+        xindices=c2ind(xconfig,base)
+        self._proj=sps.coo_matrix((signs,(xindices,yindices)),shape=(N,N),dtype='int32')
+
+
     def update(self,nl,nr,**kwargs):
         '''
         update the projection matrix.
         '''
-        NL=len(nl)
-        NR=len(nr)
-        assert(NL==NR)
-        yindices=arange(NL*NR)
-        xindices=NL*(yindices%NR)+yindices/NR
-        factor=(-1)**((nl[:,newaxis]*nr)%2).ravel()
-        self._proj=sps.coo_matrix((factor,(xindices,yindices)),shape=(NL*NR,NL*NR),dtype='int32')
+        assert(len(nl)==len(nr))
+        N=len(nl)*len(nr)
+        #base=array([N0,N1,N0,N1])
+        base=array([len(nl),len(nr)])
+        yindices=arange(N)
+        yconfig=ind2c(yindices,base)
+        #xconfig=yconfig[:,array([2,3,0,1])]
+        xconfig=yconfig[:,array([1,0])]
+        #signs=(-1)**(((nl0[yconfig[:,0]]+n1[yconfig[:,1]])*(nr0[yconfig[:,2]]+n1[yconfig[:,3]]))%2)
+        signs=(-1)**((nl[yconfig[:,0]]*nr[yconfig[:,1]])%2)
+        xindices=c2ind(xconfig,base)
+        self._proj=sps.coo_matrix((signs,(xindices,yindices)),shape=(N,N),dtype='int32')
 

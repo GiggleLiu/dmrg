@@ -10,7 +10,7 @@ import scipy.sparse as sps
 import copy,time,pdb,warnings
 
 from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker
-from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString
+from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString,tensor
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
 from rglib.hexpand import signlib
 from disc_symm import *
@@ -312,6 +312,7 @@ class DMRGEngine(object):
         if ndim(maxN)==0: maxN=[maxN]*maxscan
         assert(len(maxN)>=maxscan)
         EG_PRE=Inf
+        initial_state=None
         for n,m in enumerate(maxN):
             for direction,iterator in zip(['->','<-'],[xrange(nsite-1),xrange(nsite-2,-1,-1)]):
                 for i in iterator:
@@ -324,11 +325,13 @@ class DMRGEngine(object):
                     else:
                         hgen_r=self.query('r',nsite-i-2)
                     print 'A'*hgen_l.N+'..'+'B'*hgen_r.N
+                    print hgen_l.ndim,hgen_r.ndim
                     opi=set(self.hchain.query(i)+self.hchain.query(i+1))
                     opi=filter(lambda op:all(array(op.siteindex)<=(hgen_l.N+hgen_r.N+1)),opi)
+                    nsite_true=hgen_l.N+hgen_r.N+2
 
                     #run a step
-                    EG,U,kpmask,err,phil=self.dmrg_step(hgen_l,hgen_r,opi,direction=direction,tol=tol,maxN=m,block_params=block_params)
+                    EG,U,kpmask,err,phil=self.dmrg_step(hgen_l,hgen_r,opi,direction=direction,tol=tol,maxN=m,block_params=block_params,initial_state=initial_state)
                     #update LPART and RPART
                     if direction=='->':
                         self.set('l',hgen_l,i+1)
@@ -343,10 +346,23 @@ class DMRGEngine(object):
                     if direction=='->' and i==nsite-2:  #fix tails
                         uu=U.tocsc()[:,kpmask]
                         ai=array([a.toarray() for a in hgen_l.evolutor.A(i)])
-                        self._tails=[einsum('ijk,jil->lk',ai.conj(),phi) for phi in phil]  #A(osite,llink,rlink), phi(llink,osite,nsite)
-                        self._tails=[[A[:,newaxis] for A in tail] for tail in self._tails]
+                        self._tails=[einsum('ijk,jiml->lkm',ai.conj(),phi) for phi in phil]  #A(osite,llink,rlink), phi(llink,osite,nsite)
+                        #self._tails=[[A[:,newaxis] for A in tail] for tail in self._tails]
 
-                    EG=EG/(hgen_l.N+hgen_r.N)
+                    #do state prediction
+                    initial_state=None   #restore initial state.
+                    if nsite==nsite_true:
+                        if self.symmetric and nsite%2==0 and ((i==nsite/2-2 and direction=='->') or (i==nsite/2 and direction=='<-')):
+                            initial_state=None
+                        elif direction=='->' and i==nsite-2:
+                            initial_state=phil[0].ravel()
+                        elif direction=='<-' and i==0:
+                            initial_state=phil[0].ravel()
+                        else:
+                            initial_state=sum([self.state_prediction(phi,hgen_l=hgen_l,hgen_r=hgen_r,direction=direction) for phi in phil],axis=0)
+                            initial_state=initial_state.ravel()
+
+                    EG=EG/nsite_true
                     if len(EL)>0:
                         diff=EG-EL[-1]
                     else:
@@ -402,7 +418,7 @@ class DMRGEngine(object):
                 break
         return EL
 
-    def dmrg_step(self,hgen_l,hgen_r,ops,direction='->',tol=0,maxN=20,block_params={}):
+    def dmrg_step(self,hgen_l,hgen_r,ops,direction='->',tol=0,maxN=20,block_params={},initial_state=None):
         '''
         Run a single step of DMRG iteration.
 
@@ -415,6 +431,7 @@ class DMRGEngine(object):
                 * '<-', left scan.
             :tol: float, the rolerence.
             :maxN: int, maximum number of kept states and the tolerence for truncation weight.
+            :initial_state: 1D array/None, the initial state(prediction), None for random.
 
         Return:
             tuple of (ground state energy(float), unitary matrix(2D array), kpmask(1D array of bool), truncation error(float))
@@ -463,18 +480,26 @@ class DMRGEngine(object):
         Hin=[]
         for op in interop:
             Hin.append(sb.get_op(op))
-        H+=sum(Hin)
+        H0=H
+        H=H+sum(Hin)
 
-        #blockize and get the eigenvalues.
+        #get the starting initial eigen state!
         #(e,),v=eigsh(H,which='SA',k=1)
         t1=time.time()
+        if initial_state is None:
+            initial_state=random.random(H.shape[0])
         target_sector=dict(block_params.get('target_sector',{}))
-        if hgen_l.N!=hgen_r.N and target_sector.has_key('C'):  #forbidden using C2 symmetry at NL!=NR
+        if hgen_l.N!=hgen_r.N and target_sector.has_key('C') or (not self.symmetric):  #forbidden using C2 symmetry at NL!=NR
             del(target_sector['C'])
-        nl=int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2
-        nr=int32(1-signlib.get_sign_from_bm(bmr,diag_only=True))/2
-        v00=self.project_state(phi=random.random(H.shape[0]),target_sector=target_sector,nl=nl,nr=nr)
-        #H=self.project_hamiltonian(H=H,target_sector=target_sector,nl=nl,nr=nr)
+            v00=initial_state
+        else:
+            nl=bml.antiblockize(int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2)
+            nr=bmr.antiblockize(int32(1-signlib.get_sign_from_bm(bmr,diag_only=True))/2)
+            print initial_state.shape,H.shape[0]
+            v00=self.project_state(phi=initial_state,target_sector=target_sector,nl=nl,nr=nr)
+            #H=self.project_hamiltonian(H=H,target_sector=target_sector,nl=nl,nr=nr)
+            print self._disc_symm_cores['C'].check_op(H)
+
         if self.bmg is None or target_block is None:
             e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=tol*1e-2,which='S',maxiter=5000)
             v=bm_tot.antiblockize(v).toarray()
@@ -484,30 +509,28 @@ class DMRGEngine(object):
                 target_block=target_block(nsite=hgen_l.N+hgen_r.N)
             bm_tot=self.bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
             H_bd=bm_tot.blockize(H)
+
             Hc=bm_tot.lextract_block(H_bd,target_block)
-            v0=bm_tot.lextract_block(v00,target_block)
-            if Hc.shape[0]<400:
-                e,v=eigh(Hc.toarray())
+            v0=bm_tot.lextract_block(bm_tot.blockize(v00),target_block)
+            try:
+                e,v=eigsh(Hc,k=nlevel,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0,M=self._disc_symm_cores['C'].get_projector(-1) if hgen_l.N==hgen_r.N else None)
+            except:
+                e,v=eigsh(Hc,k=nlevel+1,which='SA',maxiter=5000,tol=tol,v0=v0)
                 e,v=e[:nlevel],v[:,:nlevel]
-            else:
-                try:
-                    e,v=eigsh(Hc,k=nlevel,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0)
-                except:
-                    e,v=eigsh(Hc,k=nlevel+1,which='SA',maxiter=5000,tol=tol,v0=v0)
-                    e,v=e[:nlevel],v[:,:nlevel]
-                order=argsort(e)
-                e,v=e[order],v[:,order]
+            order=argsort(e)
+            e,v=e[order],v[:,order]
             bindex=bm_tot.labels.index(target_block)
             vl=[bm_tot.antiblockize(sps.coo_matrix((v[:,i],(arange(bm_tot.Nr[bindex],\
                     bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128')).toarray()\
                     for i in xrange(nlevel)]
-            if hgen_r.N==hgen_l.N:
+            if hgen_r.N==hgen_l.N and self.symmetric:
                 comps0=self._disc_symm_cores['C'].check_parity(v00)
                 comps=self._disc_symm_cores['C'].check_parity(vl[0][:,0])
-                print self._disc_symm_cores['C'].check_op(H)
                 print comps0,comps
                 pdb.set_trace()
         t2=time.time()
+        v00=v00/norm(v00)
+        print 'The goodness of the estimate -> %s'%(abs(v00.dot(vl[0].conj()))**2)
         vl=[v.reshape([ndiml,ndimr]) for v in vl]
         for v in vl:
             v[abs(v)<ZERO_REF]=0
@@ -546,39 +569,47 @@ class DMRGEngine(object):
             hgen_r.trunc(U=U,block_marker=bm,kpmask=kpmask)
         t3=time.time()
         print 'Elapse -> total:%s, eigen:%s'%(t3-t0,t2-t1)
-        phil=[phi.toarray().reshape([ndiml/hndim,hndim,ndimr]) for phi in phil]
+        phil=[phi.toarray().reshape([ndiml/hndim,hndim,ndimr/hndim,hndim]) for phi in phil]
         return e,U,kpmask,trunc_error,phil
 
-    def direct_solve(self,n=None):
+    def state_prediction(self,phi,hgen_l,hgen_r,direction):
         '''
-        Directly solve the ground state energy through lanczos.
+        Predict the state for the next iteration.
 
-        n:
-            The length of change.
+        Parameters:
+            :phi: ndarray, the state from the last iteration, [llink, site1, rlink, site2]
+            :hgen_l/hgen_r: <RGHGen>, the hamiltonian generator for the left/right block.
+            :direction: '->'/'<-', the moving direction.
+
+        Return:
+            ndarray, the new state in the basis |al+1,sl+2,sl+3,al+3>.
+
+            reference -> PRL 77. 3633
         '''
-        nsite=self.hchain.nsite
-        if n is None: n=nsite
-        assert(n<=nsite and n>=0)
-        hgen=copy.deepcopy(self.hgen)
-        if not isinstance(hgen.evolutor,NullEvolutor):
-            raise ValueError('The evolutor must be null!')
+        assert(direction=='<-' or direction=='->')
+        phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
+        NL,NR=hgen_l.N,hgen_r.N
+        nsite=NL+NR
+        if direction=='->':
+            A=hgen_l.evolutor.A(NL-1,dense=True)   #get A[sNL](NL-1,NL)
+            B=hgen_r.evolutor.A(NR-2,dense=True)   #get B[sNR](NL+1,NL+2)
+            A=tensor.Tensor(A,labels=['sl+1','al','al+1']).conj()
+            B=tensor.Tensor(B,labels=['sl+3','al+3','al+2']).conj()    #!the conjugate?
+        else:
+            A=hgen_l.evolutor.A(NL-2,dense=True)
+            B=hgen_r.evolutor.A(NR-1,dense=True)
+            A=tensor.Tensor(A,labels=['sl','al-1','al']).conj()
+            B=tensor.Tensor(B,labels=['sl+2','al+2','al+1']).conj()    #!the conjugate?
+        #print phi.__repr__(),phi.shape
+        #print A.__repr__(),A.shape
+        #print B.__repr__(),B.shape
+        phi=tensor.contract([A,phi,B])
+        if direction=='->':
+            phi=phi.chorder([0,1,3,2])
+        else:
+            phi=phi.chorder([1,0,3,2])
+        return phi
 
-        for i in xrange(n):
-            print 'Running iteration %s'%i
-            t0=time.time()
-            ops=self.hchain.query(i)
-            intraop,interop=[],[]
-            for op in ops:
-                siteindices=array(op.siteindex)
-                if any(siteindices>i):
-                    interop.append(op)
-                else:
-                    intraop.append(op)
-            hgen.expand(intraop)
-            hgen.trunc()
-            EG,EV=eigsh(hgen.H,k=1,which='SA')
-            print 'Iteration %s, EG = %s'%(i,EG/hgen.N)
-        return EG/self.nsite
 
     def get_mps(self,labels=('s','a'),target_level=0):
         '''
