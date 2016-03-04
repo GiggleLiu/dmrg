@@ -88,13 +88,14 @@ class TestFH(object):
         self.set_params(U=4.,t=1.,mu=0.,t2=0.,nsite=nsite)
         H_serial=op2collection(op=self.model_occ.hgen.get_opH())
         bmgen=get_bmgen(self.expander3.spaceconfig,'QM')
-        dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen,symmetric=True,disc_symm='C')
-        EG2=dmrgegn.run_finite(endpoint=(4,'->',nsite-2),maxN=[10,40,100,100,40],tol=0,block_params={'target_block':(0,0),'target_sector':{'C':-1}})[-1]
+        dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen,reflect=True)
+        EG2=dmrgegn.run_finite(endpoint=(4,'->',nsite-2),maxN=[10,30,50,50,50],tol=0,block_params={'target_block':(0,0),'target_sector':{'C':-1}})[-1]
         print EG2*nsite
         pdb.set_trace()
 
     def test_nonint(self):
         #get the exact solution.
+        self.set_params(U=0.,t=1.,mu=0.5,t2=0.,nsite=6)
         h_exact=self.model_exact.hgen.H()
         E_excit=eigvalsh(h_exact)
         Emin_exact=sum(E_excit[E_excit<0])
@@ -117,7 +118,7 @@ class TestFH(object):
 
         #the solution through dmrg.
         bmgen=get_bmgen(self.expander3.spaceconfig,'QM')
-        dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen,symmetric=True)
+        dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen,reflect=True)
         EG2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0)[-1]
         assert_almost_equal(Emin_exact,EG2*H_serial.nsite,decimal=4)
 

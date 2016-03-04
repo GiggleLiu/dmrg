@@ -4,12 +4,13 @@ Discrete symmetries.
 
 from numpy import *
 from scipy import sparse as sps
+from scipy.linalg import norm
 import pdb
 
 from rglib.mps import OpUnit
 from tba.lattice import ind2c,c2ind
 
-__all__=['DiscSymm','PHSymm','FlipSymm','C2Symm']
+__all__=['DiscSymm','PHSymm','FlipSymm','C2Symm','SymmetryHandler']
 
 class DiscSymm(object):
     '''
@@ -95,15 +96,14 @@ class DiscSymm(object):
         '''
         P=self.get_projector().tocsr()
         diff=(P.dot(op.tocsc())-op.tocsr().dot(P.tocsc())).data
-        print diff
         res=allclose(diff,0)
         if not res:
             pdb.set_trace()
         return res
 
-    def check_parity(self,phi,**kwargs):
+    def get_parity(self,phi,**kwargs):
         '''
-        check the parity of a state.
+        get the parity of a state.
 
         Parameters:
             :phi: 1D array, the state vector.
@@ -174,40 +174,160 @@ class C2Symm(DiscSymm):
     def __init__(self,proj=None):
         super(C2Symm,self).__init__('c2',proj)
 
-    def update(self,nl0,nr0,n1,**kwargs):
+    def update(self,n,**kwargs):
         '''
         update the projection matrix.
         '''
-        nr=nl=(nl0[:,newaxis]+n1).ravel()
-        assert(len(nl0)==len(nr0))
-        N0,N1=len(nl0),len(n1)
-        N=(N0*N1)**2
-        #base=array([N0,N1,N0,N1])
-        base=array([N0*N1,N0*N1])
+        N=len(n)**2
+        base=array([len(n)]*2)
         yindices=arange(N)
         yconfig=ind2c(yindices,base)
-        #xconfig=yconfig[:,array([2,3,0,1])]
         xconfig=yconfig[:,array([1,0])]
-        #signs=(-1)**(((nl0[yconfig[:,0]]+n1[yconfig[:,1]])*(nr0[yconfig[:,2]]+n1[yconfig[:,3]]))%2)
-        signs=(-1)**((nl[yconfig[:,0]]*nr[yconfig[:,1]])%2)
+        signs=(-1)**((n[yconfig[:,0]]*n[yconfig[:,1]])%2)
         xindices=c2ind(xconfig,base)
         self._proj=sps.coo_matrix((signs,(xindices,yindices)),shape=(N,N),dtype='int32')
 
 
-    def update(self,nl,nr,**kwargs):
-        '''
-        update the projection matrix.
-        '''
-        assert(len(nl)==len(nr))
-        N=len(nl)*len(nr)
-        #base=array([N0,N1,N0,N1])
-        base=array([len(nl),len(nr)])
-        yindices=arange(N)
-        yconfig=ind2c(yindices,base)
-        #xconfig=yconfig[:,array([2,3,0,1])]
-        xconfig=yconfig[:,array([1,0])]
-        #signs=(-1)**(((nl0[yconfig[:,0]]+n1[yconfig[:,1]])*(nr0[yconfig[:,2]]+n1[yconfig[:,3]]))%2)
-        signs=(-1)**((nl[yconfig[:,0]]*nr[yconfig[:,1]])%2)
-        xindices=c2ind(xconfig,base)
-        self._proj=sps.coo_matrix((signs,(xindices,yindices)),shape=(N,N),dtype='int32')
+class SymmetryHandler(object):
+    '''
+    The symmetry handler for DMRG iteration.
 
+    Attributes:
+        :target_sector: dict, the target sector {parity label, sector}
+        :handlers: dict, the handlers.
+        :useC: bool, use good quantum number C2.
+        :C_detect_scope: integer, the number of lowest levels to get \
+                in order to search for the lowest state with specific C2 parity.
+
+    Note:
+        keys for target_sector and handlers,
+    
+        * 'C', C2 space end-to-end symmetry.
+        * 'J', Particle hole symmetry.
+        * 'P', Spin flip symmetry.
+    '''
+    def __init__(self,target_sector,C_detect_scope=2):
+        self.target_sector=target_sector
+        self.handlers={}
+        self.useC=True
+        self.C_detect_scope=C_detect_scope
+        for symm in target_sector:
+            if symm=='C':
+                self.handlers['C']=C2Symm()
+            elif symm=='P':
+                self.handlers['P']=FlipSymm()
+            elif symm=='J':
+                self.handlers['J']=PHSymm()
+            else:
+                raise ValueError('Unknow symmetry %s'%symm)
+
+    @property
+    def symms(self):
+        '''Active discrete symmetries.'''
+        res=self.handlers.keys()
+        if not self.useC and 'C' in res:
+            res.remove('C')
+        return res
+
+    @property
+    def isnull(self):
+        '''is null or not.'''
+        return len(self.target_sector)==0
+
+    def project_state(self,phi):
+        '''
+        project phi into specific discrete symmtry space.
+
+        Parameters:
+            :phi: 1D array, the state vector.
+
+        Return:
+            1D array, the state after projection.
+        '''
+        target_sector=self.target_sector
+        for symm in self.symms:
+            handler=self.handlers[symm]
+            phi=handler.project_state(phi,parity=target_sector[symm])
+        return phi
+
+    def get_projector(self):
+        '''
+        Get the specific projection operator.
+
+        Parameters:
+            :target_sector: dict, {parity type:sector}
+
+        Return:
+            matrix, the projection matrix.
+        '''
+        target_sector=self.target_sector
+        if len(target_sector)==0:
+            return None
+        pl=[]
+        for symm in self.symms:
+            pl.append(self.handlers[symm].get_projector(target_sector[symm]))
+        return prod(pl)
+
+    def project_op(self,op):
+        '''
+        project operator(e.g. hamiltonian) into specific discrete symmtry space.
+
+        Parameters:
+            :op: matrix, the operator.
+
+        Return:
+            matrix, the hamiltonian after projection.
+        '''
+        target_sector=self.target_sector
+        for symm in self.symms:
+            handler=self.handlers[symm]
+            op=handler.project_op(op,parity=target_sector[symm])
+        return op
+
+    def update_handlers(self,useC=True,**kwargs):
+        '''
+        Update handlers using provided parameters.
+
+        Key Word Parameters:
+
+            * `n`, integer, the number of particle for left-right blocks, used for C2 symmetry.
+        '''
+        self.useC=useC
+        if self.has_symmetry('C'):
+            assert('n' in kwargs)
+        for symm in self.symms:
+            self.handlers[symm].update(**kwargs)
+
+    def has_symmetry(self,symm):
+        '''
+        Check if this handler cope with specific symmetry.
+
+        Parameters:
+            :symm: char, the specific symmetry.
+
+        Return:
+            bool
+        '''
+        res=self.target_sector.has_key(symm)
+        if symm=='C' and not self.useC:
+            res=False
+        return res
+
+    def check_op(self,op):
+        '''
+        Check whether an operator do obey these discrete symmetries.
+        '''
+        return all([self.handlers[symm].check_op(op) for symm in self.symms])
+
+    def check_parity(self,phi,**kwargs):
+        '''
+        check the parity of a state.
+
+        Parameters:
+            :phi: 1D array, the state vector.
+
+        Return:
+            bool, the state is qualified or not.
+        '''
+        overlap=abs(phi.dot(self.project_state(phi).conj()))/norm(phi)**2
+        return overlap>0.5

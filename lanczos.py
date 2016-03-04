@@ -52,7 +52,7 @@ def get_H_bm(H,hgen,bstr):
     for i in xrange(nsite):
         ops=H.filter(lambda sites:all(sites<=i) and (i in sites))
         hgen.expand(ops)
-        bm=bmgen.update_blockmarker(hgen.block_marker)
+        bm=bmgen.update_blockmarker(hgen.block_marker,nsite=nsite)
         hgen.trunc(U=None,block_marker=bm)
     return hgen.H,bm
 

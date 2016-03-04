@@ -144,13 +144,14 @@ class DMRGTest():
         '''
         Run iDMFT for heisenberg model.
         '''
-        model=self.get_model(10,1)
+        nsite=10
+        model=self.get_model(nsite,1)
         hgen1=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=NullEvolutor(hndim=2))
         hgen2=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=MaskedEvolutor(hndim=2))
-        dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen1,tol=0)
-        EG1=dmrgegn.direct_solve()
+        H=get_H(model.H_serial,hgen1)
+        EG1=eigsh(H,k=1,which='SA')[0]
         dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen2,tol=0)
-        EG2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0)[-1]
+        EG2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0)[-1]*nsite
         assert_almost_equal(EG1,EG2,decimal=4)
 
 
@@ -176,7 +177,7 @@ class DMRGTest():
         print 'The Ground State Energy is %s, tolerence %s.'%(Emin,Emin-Emin2)
         assert_almost_equal(Emin,Emin2)
 
-DMRGTest().test_vmps()
 DMRGTest().test_lanczos()
 DMRGTest().test_dmrg_finite()
 DMRGTest().test_dmrg_infinite()
+DMRGTest().test_vmps()

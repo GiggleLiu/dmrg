@@ -1,5 +1,5 @@
 '''
-DMRG Engine.
+DMRG Engine, with the normal order.
 '''
 
 from numpy import *
@@ -9,16 +9,15 @@ from matplotlib.pyplot import *
 import scipy.sparse as sps
 import copy,time,pdb,warnings
 
-from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker
+from blockmatrix.blocklib import eigbsh,eigbh
 from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString,tensor
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
 from rglib.hexpand import signlib
 from disc_symm import SymmetryHandler
-from superblock import SuperBlock,site_image
 
 ZERO_REF=1e-10
 
-__all__=['site_image','SuperBlock','DMRGEngine']
+__all__=['SuperBlock','DMRGEngine']
 
 class DMRGEngine(object):
     '''
@@ -110,16 +109,9 @@ class DMRGEngine(object):
             list, the ground state energy of each scan.
         '''
         EL=[]
-        #check the validity of datas.
+        symm_handler=SymmetryHandler(dict(block_params.get('target_sector',{})))
         if isinstance(self.hgen.evolutor,NullEvolutor):
             raise ValueError('The evolutor must not be null!')
-        symm_handler=SymmetryHandler(dict(block_params.get('target_sector',{})))
-        nlevel=block_params.get('nlevel',1)
-        if not symm_handler.isnull and nlevel!=1:
-            raise NotImplementedError('The symmetric Handler can not be used in multi-level calculation!')
-        if not symm_handler.isnull and self.bmg is None:
-            raise NotImplementedError('The symmetric Handler can not without Block marker generator!')
-
         nsite=self.hchain.nsite
         if endpoint is None: endpoint=(5,'->',nsite-2)
         maxscan,end_direction,end_site=endpoint
@@ -135,10 +127,11 @@ class DMRGEngine(object):
                     #setup generators and operators.
                     hgen_l=self.query('l',i)
                     if n==0 and direction=='->' and i<(nsite+1)/2:
-                        hgen_r=hgen_l
+                        hgen_r=hgen_l.make_copy()
                     else:
-                        hgen_r=self.query('r',nsite-i-2)
+                        hgen_r=self.query('r',nsite-i-2).make_copy()
                     print 'A'*hgen_l.N+'..'+'B'*hgen_r.N
+                    print hgen_l.ndim,hgen_r.ndim
                     opi=set(self.hchain.query(i)+self.hchain.query(i+1))
                     opi=filter(lambda op:all(array(op.siteindex)<=(hgen_l.N+hgen_r.N+1)),opi)
                     nsite_true=hgen_l.N+hgen_r.N+2
@@ -203,15 +196,6 @@ class DMRGEngine(object):
         maxN:
             Maximum number of kept states and the tolerence for truncation weight.
         '''
-        if isinstance(self.hgen.evolutor,NullEvolutor):
-            raise ValueError('The evolutor must not be null!')
-        symm_handler=SymmetryHandler(dict(block_params.get('target_sector',{})))
-        nlevel=block_params.get('nlevel',1)
-        if not symm_handler.isnull and nlevel!=1:
-            raise NotImplementedError('The symmetric Handler can not be used in multi-level calculation!')
-        if not symm_handler.isnull and self.bmg is None:
-            raise NotImplementedError('The symmetric Handler can not without Block marker generator!')
-
         EL=[]
         hgen=copy.deepcopy(self.hgen)
         if isinstance(hgen.evolutor,NullEvolutor):
@@ -223,7 +207,7 @@ class DMRGEngine(object):
             t0=time.time()
             opi=unique(self.hchain.query(i)+self.hchain.query(i+1))
             opi=filter(lambda op:all(array(op.siteindex)<=(2*hgen.N+1)),opi)
-            EG,U,kpmask,err,phil=self.dmrg_step(hgen,hgen,opi,tol=tol,block_params=block_params,symm_handler=symm_handler)
+            EG,U,kpmask,err,phil=self.dmrg_step(hgen,hgen.make_copy(),opi,tol=tol,block_params=block_params)
             EG=EG/(2.*(i+1))
             if len(EL)>0:
                 diff=EG-EL[-1]
@@ -263,28 +247,23 @@ class DMRGEngine(object):
         NL,NR=hgen_l.N,hgen_r.N
         ndiml0,ndimr0=hgen_l.ndim,hgen_r.ndim
         ndiml,ndimr=ndiml0*hndim,ndimr0*hndim
-        #filter operators to extract left-only and right-only blocks.
-        for op in ops:
-            siteindices=array(op.siteindex).reshape([1,-1])
-            if any(siteindices>NL+NR+1) or any(siteindices<0):
-                print 'Drop opstring %s'%op
-            elif all(siteindices>NL):
-                opstr=site_image(op,NL+1,NR+1)
-                intraop_r.append(opstr)
-            elif all(siteindices<=NL):
-                intraop_l.append(op)
-            else:
-                interop.append(op)
-        HL0=hgen_l.expand(intraop_l)
-        if hgen_r is hgen_l:
-            HR0=HL0
-        else:
-            HR0=hgen_r.expand(intraop_r)
-
+        #for op in ops:
+        #    siteindices=array(op.siteindex).reshape([1,-1])
+        #    if any(siteindices>NL+NR+1) or any(siteindices<0):
+        #        print 'Drop opstring %s'%op
+        #    elif all(siteindices>NL):
+        #        opstr=sb.site_image(op)
+        #        intraop_r.append(opstr)
+        #    elif all(siteindices<=NL):
+        #        intraop_l.append(op)
+        #    else:
+        #        interop.append(op)
+        HL0=hgen_l.H#expand(intraop_l)
+        HR0=hgen_r.H
         #blockize HL0 and HR0
-        nlevel=block_params.get('nlevel',1)
         if self.bmg is not None:
             target_block=block_params.get('target_block')
+            nlevel=block_params.get('nlevel',1)
             n=max(hgen_l.N,hgen_r.N)
             if isinstance(hgen_l.evolutor,MaskedEvolutor) and n>1:
                 kpmask_l=hgen_l.evolutor.kpmask(hgen_l.N-2)
@@ -294,43 +273,42 @@ class DMRGEngine(object):
             bml=self.bmg.update_blockmarker(hgen_l.block_marker,kpmask=kpmask_l,nsite=hgen_l.N)
             bmr=self.bmg.update_blockmarker(hgen_r.block_marker,kpmask=kpmask_r,nsite=hgen_r.N)
         else:
-            bml=None #get_blockmarker(HL0)
-            bmr=None #get_blockmarker(HR0)
+            bml=bmr=None
 
-        H=kron(HL0,sps.identity(ndimr))+kron(sps.identity(ndiml),HR0)
+        H=kron(HL0,sps.identity(hndim**2*hgen_r.ndim))+kron(sps.identity(hgen_l.ndim*hndim**2),HR0)
         sb=SuperBlock(hgen_l,hgen_r)
-        Hin=[]
-        for op in interop:
-            Hin.append(sb.get_op(op))
-        H=H+sum(Hin)
+        #Hin=[]
+        #for op in interop+sb.site_image(intraop_r):
+        #    Hin.append(sb.get_op(op))
+        #H0=H
+        #H=H+sum(Hin)
+        HL=[]
+        for op in ops:
+            HL.append(sb.get_op(op))
+        H=H+sum(HL)
 
         #get the starting initial eigen state!
         #(e,),v=eigsh(H,which='SA',k=1)
         t1=time.time()
         if initial_state is None:
             initial_state=random.random(H.shape[0])
-        if not symm_handler.isnull:
+        if symm_handler is not None:
             if hgen_l.N!=hgen_r.N or not self.reflect:  #forbidden using C2 symmetry at NL!=NR
                 symm_handler.update_handlers(useC=False)
+                v00=initial_state
             else:
                 nl=bml.antiblockize(int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2)
                 symm_handler.update_handlers(n=nl,useC=True)
-            #v00=symm_handler.project_state(phi=initial_state)
-            v00=initial_state
-            H=symm_handler.project_op(op=H)
-            assert(symm_handler.check_op(H))
+                v00=symm_handler.project_state(phi=initial_state)
+                #H=symm_handler.project_hamiltonian(H=H)
+                assert(symm_handler.check_op(H))
         else:
             v00=initial_state
 
-        #perform diagonalization
-        ##first, detect specific block for diagonalization, get Hc and v0
         if self.bmg is None or target_block is None:
-            Hc=H
-            bm_tot=None
-            v0=v00
-            #e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=tol*1e-2,which='S',maxiter=5000)
-            #v=bm_tot.antiblockize(v).toarray()
-            #vl=[v]
+            e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=tol*1e-2,which='S',maxiter=5000)
+            v=bm_tot.antiblockize(v).toarray()
+            vl=[v]
         else:
             if hasattr(target_block,'__call__'):
                 target_block=target_block(nsite=hgen_l.N+hgen_r.N)
@@ -339,38 +317,26 @@ class DMRGEngine(object):
 
             Hc=bm_tot.lextract_block(H_bd,target_block)
             v0=bm_tot.lextract_block(bm_tot.blockize(v00),target_block)
-
-        ##second, diagonalize to get desired number of levels
-        detect_C2=symm_handler.target_sector.has_key('C') and not symm_handler.useC
-        k=max(nlevel,symm_handler.C_detect_scope if detect_C2 else 1)
-        #M=None# if len(symm_handler.symms)==0 else symm_handler.get_projector()
-        if Hc.shape[0]<400:
-            e,v=eigh(Hc.toarray())
-            e,v=e[:k],v[:,:k]
-        try:
-            e,v=eigsh(Hc,k=k,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0)
-        except:
-            e,v=eigsh(Hc,k=k+1,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0)
-        order=argsort(e)
-        e,v=e[order],v[:,order]
-        ###roll back blocks
-        if bm_tot is not None:
+            projector=symm_handler.get_projector()
+            try:
+                e,v=eigsh(Hc,k=nlevel,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0,M=M)
+            except:
+                e,v=eigsh(Hc,k=nlevel+1,which='SA',maxiter=5000,tol=tol,v0=v0)
+                e,v=e[:nlevel],v[:,:nlevel]
+            order=argsort(e)
+            e,v=e[order],v[:,order]
             bindex=bm_tot.labels.index(target_block)
-            vl=array([bm_tot.antiblockize(sps.coo_matrix((v[:,i],(arange(bm_tot.Nr[bindex],\
-                    bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128')).toarray().ravel()\
-                    for i in xrange(v.shape[-1])])
-        else:
-            vl=v.T
-        if len(symm_handler.symms)==0:
-            assert(all([symm_handler.check_parity(vi) for vi in vl]))
-        overlaps=array([abs(v00.dot(vi.conj()))/norm(v0)/norm(vi) for vi in vl])
-        if detect_C2:
-            mask=overlaps>0.5
-            e,vl,overlaps=e[mask],vl[mask],overlaps[mask]
-            assert(len(vl)>=nlevel)
-            vl=vl[:nlevel]
-        print 'The goodness of the estimate -> %s'%(overlaps)
+            vl=[bm_tot.antiblockize(sps.coo_matrix((v[:,i],(arange(bm_tot.Nr[bindex],\
+                    bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128')).toarray()\
+                    for i in xrange(nlevel)]
+            if hgen_r.N==hgen_l.N and self.reflect and symm_handler.has_symmetry('C'):
+                comps0=symm_handler.handlers['C'].check_parity(v00)
+                comps=symm_handler.handlers['C'].check_parity(vl[0][:,0])
+                print comps0,comps
         t2=time.time()
+        v00=v00/norm(v00)
+        vl0=vl[0][:,0]
+        print 'The goodness of the estimate -> %s'%(abs(v00.dot(vl0.conj()))**2)
         vl=[v.reshape([ndiml,ndimr]) for v in vl]
         for v in vl:
             v[abs(v)<ZERO_REF]=0
@@ -397,7 +363,7 @@ class DMRGEngine(object):
                 pdb.set_trace()
                 raise Exception('density matrix is not block diagonal, which is not expected, make sure your are using additive good quantum numbers.')
         spec,U,bm,rho_b=eigbh(rho,bm=bm)
-        print 'Find %s(%s) blocks.'%(bm.nblock,bm.nblock)
+        print 'Find %s(%s) blocks.'%(bm.nblock,bm_tot.nblock)
 
         kpmask=zeros(U.shape[1],dtype='bool')
         spec_cut=sort(spec)[max(0,len(kpmask)-maxN)]
@@ -410,7 +376,7 @@ class DMRGEngine(object):
             hgen_r.trunc(U=U,block_marker=bm,kpmask=kpmask)
         t3=time.time()
         print 'Elapse -> total:%s, eigen:%s'%(t3-t0,t2-t1)
-        phil=[phi.toarray().reshape([ndiml/hndim,hndim,ndimr/hndim,hndim]) for phi in phil]
+        phil=[phi.toarray().reshape([ndiml/hndim,hndim,hndim,ndimr/hndim]) for phi in phil]
         return e,U,kpmask,trunc_error,phil
 
     def state_prediction(self,phi,hgen_l,hgen_r,direction):
@@ -428,7 +394,7 @@ class DMRGEngine(object):
             reference -> PRL 77. 3633
         '''
         assert(direction=='<-' or direction=='->')
-        phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
+        phi=tensor.Tensor(phi,labels=['al','sl+1','sl+2','al+2']) #l=NL-1
         NL,NR=hgen_l.N,hgen_r.N
         nsite=NL+NR
         lr=NR-2 if direction=='->' else NR-1
@@ -439,22 +405,12 @@ class DMRGEngine(object):
             A=tensor.Tensor(A,labels=['sl+1','al','al+1']).conj()
             B=tensor.Tensor(B,labels=['sl+3','al+3','al+2']).conj()    #!the conjugate?
             phi=tensor.contract([A,phi,B])
-            phi=phi.chorder([0,1,3,2])
-            if hasattr(hgen_r,'zstring'):  #cope with the sign problem
-                n1=(1-Z4scfg(hgen_l.spaceconfig).diagonal())/2
-                nr=(1-hgen_r.zstring[lr].diagonal())/2
-                n_tot=n1[:,newaxis,newaxis]*(nr[:,newaxis]+n1)
-                phi=phi*(1-2*(n_tot%2))
+            phi=phi.chorder([0,1,2,3])
         else:
             A=tensor.Tensor(A,labels=['sl','al-1','al']).conj()
             B=tensor.Tensor(B,labels=['sl+2','al+2','al+1']).conj()    #!the conjugate?
             phi=tensor.contract([A,phi,B])
-            phi=phi.chorder([1,0,3,2])
-            if hasattr(hgen_r,'zstring'):  #cope with the sign problem
-                n1=(1-Z4scfg(hgen_l.spaceconfig).diagonal())/2
-                nr=(1-hgen_r.zstring[lr+1].diagonal())/2
-                n_tot=n1*(nr[:,newaxis])
-                phi=phi*(1-2*(n_tot%2))
+            phi=phi.chorder([1,0,2,3])
         return phi
 
     def update_tail(self,phi,nsite):
