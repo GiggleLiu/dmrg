@@ -113,7 +113,7 @@ class DMRGEngine(object):
         #check the validity of datas.
         if isinstance(self.hgen.evolutor,NullEvolutor):
             raise ValueError('The evolutor must not be null!')
-        symm_handler=SymmetryHandler(dict(block_params.get('target_sector',{})))
+        symm_handler=SymmetryHandler(dict(block_params.get('target_sector',{})),C_detect_scope=block_params.get('C_detect_scope',3))
         nlevel=block_params.get('nlevel',1)
         if not symm_handler.isnull and nlevel!=1:
             raise NotImplementedError('The symmetric Handler can not be used in multi-level calculation!')
@@ -205,12 +205,14 @@ class DMRGEngine(object):
         '''
         if isinstance(self.hgen.evolutor,NullEvolutor):
             raise ValueError('The evolutor must not be null!')
-        symm_handler=SymmetryHandler(dict(block_params.get('target_sector',{})))
+        symm_handler=SymmetryHandler(dict(block_params.get('target_sector',{})),C_detect_scope=block_params.get('C_detect_scope',3))
         nlevel=block_params.get('nlevel',1)
         if not symm_handler.isnull and nlevel!=1:
             raise NotImplementedError('The symmetric Handler can not be used in multi-level calculation!')
         if not symm_handler.isnull and self.bmg is None:
             raise NotImplementedError('The symmetric Handler can not without Block marker generator!')
+        if not self.reflect and symm_handler.has_symmetry('C'):
+            warnings.warn('Using reflection symmetry but no reflection, not reliable!!!!!!!!!!')
 
         EL=[]
         hgen=copy.deepcopy(self.hgen)
@@ -310,7 +312,7 @@ class DMRGEngine(object):
         if initial_state is None:
             initial_state=random.random(H.shape[0])
         if not symm_handler.isnull:
-            if hgen_l.N!=hgen_r.N or not self.reflect:  #forbidden using C2 symmetry at NL!=NR
+            if hgen_l.N!=hgen_r.N or (not self.reflect and not (hgen_l is hgen_r)):  #forbidden using C2 symmetry at NL!=NR
                 symm_handler.update_handlers(useC=False)
             else:
                 nl=bml.antiblockize(int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2)

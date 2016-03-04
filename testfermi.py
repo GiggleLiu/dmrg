@@ -89,6 +89,7 @@ class TestFH(object):
         H_serial=op2collection(op=self.model_occ.hgen.get_opH())
         bmgen=get_bmgen(self.expander3.spaceconfig,'QM')
         dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen,reflect=True)
+        #EG2=dmrgegn.run_finite(endpoint=(4,'->',nsite-2),maxN=[10,30,50,50,50],tol=0,block_params={'target_block':(0,0)})[-1]
         EG2=dmrgegn.run_finite(endpoint=(4,'->',nsite-2),maxN=[10,30,50,50,50],tol=0,block_params={'target_block':(0,0),'target_sector':{'C':-1}})[-1]
         print EG2*nsite
         pdb.set_trace()
