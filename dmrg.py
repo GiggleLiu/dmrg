@@ -4,7 +4,7 @@ DMRG Engine.
 
 from numpy import *
 from scipy.sparse.linalg import eigsh
-from scipy.linalg import eigh,norm
+from scipy.linalg import eigh,norm,svd
 from matplotlib.pyplot import *
 import scipy.sparse as sps
 import copy,time,pdb,warnings
@@ -185,10 +185,10 @@ class DMRGEngine(object):
                         print 'MidPoint -> EG = %s, dE = %s'%(EG,diff)
                         if n==maxscan-1:
                             print 'Breaking due to maximum scan reached!'
-                            return EL
+                            return EG,self.get_mps2(phi=phil[0],hgen_r=hgen_r,hgen_l=hgen_l,direction=direction)
                         elif all(abs(diff)<tol):
                             print 'Breaking due to enough precision reached!'
-                            return EL
+                            return EG,self.get_mps2(phi=phil[0],hgen_r=hgen_r,hgen_l=hgen_l,direction=direction)
                         else:
                             EG_PRE=EG
 
@@ -397,13 +397,15 @@ class DMRGEngine(object):
                 pcolor(exp(abs(rho.toarray().real)))
                 bm.show()
                 pdb.set_trace()
-                raise Exception('density matrix is not block diagonal, which is not expected, make sure your are using additive good quantum numbers.')
+                raise Exception('''Density matrix is not block diagonal, which is not expected,
+        1. make sure your are using additive good quantum numbers.
+        2. avoid ground state degeneracy.''')
         spec,U,bm,rho_b=eigbh(rho,bm=bm)
         print 'Find %s(%s) blocks.'%(bm.nblock,bm.nblock)
 
         kpmask=zeros(U.shape[1],dtype='bool')
         spec_cut=sort(spec)[max(0,len(kpmask)-maxN)]
-        kpmask[(spec>=spec_cut)&(spec>tol*1e-2)]=True
+        kpmask[(spec>=spec_cut)&(spec>ZERO_REF)]=True
         print '%s states kept.'%sum(kpmask)
         trunc_error=sum(spec[~kpmask])
         if direction=='->':
@@ -490,6 +492,55 @@ class DMRGEngine(object):
         tail=self._tails[target_level]
         #ML=[chorder(ai,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for ai in [tail]+hgen.evolutor.get_AL(dense=True)[::-1]]
         #mps=MPS(AL=[],BL=ML,S=ones(1),labels=labels)
-        ML=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]) for ai in hgen.evolutor.get_AL(dense=True)+[tail]]
+        ML=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]).conj() for ai in hgen.evolutor.get_AL(dense=True)+[tail]]
         mps=MPS(AL=ML,BL=[],S=ones(1),labels=labels)
+        print [shape(ai) for ai in ML]
+        return mps
+
+    def get_mps2(self,phi,hgen_l,hgen_r,labels=['s','a'],direction=None):
+        '''
+        Get the MPS from run-time phi, and evolution matrices.
+
+        Parameters:
+            :phi: ndarray, the eigen-function of current step.
+            :hgen_l/hgen_r: list, the hamiltonian generator for left/right block.
+            :direction: '->'/'<-'/None, if None, the direction is provided by the truncation information.
+
+        Return:
+            <MPS>, the disired MPS, the canonicallity if decided by the current position.
+        '''
+        #get the direction
+        if direction is None:
+            direction='->' if hgen_l.truncated else '<-'
+        assert(direction=='<-' or direction=='->')
+
+        phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
+        NL,NR=hgen_l.N,hgen_r.N
+        nsite=NL+NR
+        if direction=='->':
+            A=hgen_l.evolutor.A(NL-1,dense=True)   #get A[sNL](NL-1,NL)
+            A=tensor.Tensor(A,labels=['sl+1','al','al+1\'']).conj()
+            phi=tensor.contract([A,phi])
+            phi=phi.chorder([0,2,1])   #now we get phi(al+1,sl+2,al+2)
+            #decouple phi into S*B, B is column-wise othorgonal
+            U,S,V=svd(phi.reshape([phi.shape[0],-1]),full_matrices=False)
+            U=tensor.Tensor(U,labels=['al+1\'','al+1'])
+            A=A*U  #get A(al,sl+1,al+1)
+            B=transpose(V.reshape([S.shape[0],phi.shape[1],phi.shape[2]]),axes=(1,2,0))   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, stored in column wise othorgonal format
+            AL=hgen_l.evolutor.get_AL(dense=True)[:-1]+[A]
+            BL=[B]+hgen_r.evolutor.get_AL(dense=True)[::-1]
+        else:
+            B=hgen_r.evolutor.A(NR-1,dense=True)   #get B[sNR](NL+1,NL+2)
+            B=tensor.Tensor(B,labels=['sl+2','al+2','al+1\'']).conj()    #!the conjugate?
+            phi=tensor.contract([phi,B])
+            #decouple phi into A*S, A is row-wise othorgonal
+            U,S,V=svd(phi.reshape([phi.shape[0]*phi.shape[1],-1]),full_matrices=False)
+            V=tensor.Tensor(V,labels=['al+1','al+1\''])
+            B=(V*B).chorder([1,2,0]).conj()   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, for B is in transposed order by default.
+            A=transpose(U.reshape([phi.shape[0],phi.shape[1],S.shape[0]]),axes=(1,0,2))   #al,sl+1,al+1 -> sl+1,al,al+1, stored in column wise othorgonal format
+            AL=hgen_l.evolutor.get_AL(dense=True)+[A]
+            BL=[B]+hgen_r.evolutor.get_AL(dense=True)[::-1][1:]
+        AL=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]).conj() for ai in AL]
+        BL=[chorder(bi,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]) for bi in BL]   #transpose
+        mps=MPS(AL=AL,BL=BL,S=S,labels=labels)
         return mps

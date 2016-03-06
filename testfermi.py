@@ -96,14 +96,14 @@ class TestFH(object):
 
     def test_nonint(self):
         #get the exact solution.
-        self.set_params(U=0.,t=1.,mu=0.5,t2=0.,nsite=6)
+        self.set_params(U=0.,t=1.,mu=0.2,t2=0.,nsite=6)
         h_exact=self.model_exact.hgen.H()
         E_excit=eigvalsh(h_exact)
         Emin_exact=sum(E_excit[E_excit<0])
 
         #the solution in occupation representation.
         h_occ=self.model_occ.hgen.H()
-        Emin=eigsh(h_occ,which='SA',k=1)[0]
+        Emin,Vmin1=eigsh(h_occ,which='SA',k=1)
         print 'The Ground State Energy for hexagon(t = %s, t2 = %s) is %s, tolerence %s.'%(self.t,self.t2,Emin,Emin-Emin_exact)
         assert_almost_equal(Emin_exact,Emin)
 
@@ -120,11 +120,14 @@ class TestFH(object):
         #the solution through dmrg.
         bmgen=get_bmgen(self.expander3.spaceconfig,'QM')
         dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen,reflect=True)
-        EG2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0)[-1]
+        EG2,Vmin2=dmrgegn.run_finite(endpoint=(5,'->',2),maxN=[10,20,30,40,40],tol=0,block_params={'target_block':(0,0)})
+        Vmin3=dmrgegn.get_mps()
+        #check for states.
         assert_almost_equal(Emin_exact,EG2*H_serial.nsite,decimal=4)
+        assert_almost_equal(abs(Vmin3.state),abs(Vmin2.state),decimal=3)
 
     def test_all(self):
-        self.test_disc_symm(20)
         self.test_nonint()
+        self.test_disc_symm(20)
 
 TestFH().test_all()
