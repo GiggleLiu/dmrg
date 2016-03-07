@@ -107,7 +107,7 @@ class DMRGEngine(object):
                 * target_block, the target block to evaluate the ground state energy.
 
         Return:
-            list, the ground state energy of each scan.
+            tuple, the ground state energy and the ground state(in <MPS> form).
         '''
         EL=[]
         #check the validity of datas.
@@ -123,14 +123,15 @@ class DMRGEngine(object):
         nsite=self.hchain.nsite
         if endpoint is None: endpoint=(5,'->',nsite-2)
         maxscan,end_direction,end_site=endpoint
-        if ndim(maxN)==0: maxN=[maxN]*maxscan
-        assert(len(maxN)>=maxscan)
+        if ndim(maxN)==0:
+            maxN=[maxN]*maxscan
+        assert(len(maxN)>=maxscan and end_site<=nsite-2)
         EG_PRE=Inf
         initial_state=None
         for n,m in enumerate(maxN):
             for direction,iterator in zip(['->','<-'],[xrange(nsite-1),xrange(nsite-2,-1,-1)]):
                 for i in iterator:
-                    print 'Running %s-th scan, iteration %s'%(n,i)
+                    print 'Running %s-th scan, iteration %s'%(n+1,i)
                     t0=time.time()
                     #setup generators and operators.
                     hgen_l=self.query('l',i)
