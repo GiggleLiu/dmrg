@@ -350,10 +350,11 @@ class DMRGEngine(object):
         if Hc.shape[0]<400:
             e,v=eigh(Hc.toarray())
             e,v=e[:k],v[:,:k]
-        try:
-            e,v=eigsh(Hc,k=k,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0)
-        except:
-            e,v=eigsh(Hc,k=k+1,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0)
+        else:
+            try:
+                e,v=eigsh(Hc,k=k,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0)
+            except:
+                e,v=eigsh(Hc,k=k+1,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0)
         order=argsort(e)
         e,v=e[order],v[:,order]
         ###roll back blocks
