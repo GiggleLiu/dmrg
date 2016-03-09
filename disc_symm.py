@@ -330,4 +330,17 @@ class SymmetryHandler(object):
             bool, the state is qualified or not.
         '''
         overlap=abs(phi.dot(self.project_state(phi).conj()))/norm(phi)**2
+        print 'Checking symmetry and get overlap -> %s'%overlap
         return overlap>0.5
+
+    def locate(self,phis):
+        '''
+        locate the desired state from multiple eigen states.
+
+        Parameters:
+            :phis: list, the eigen-states.
+
+        Return:
+            1D array, the index of states meeting requirements.
+        '''
+        return where([self.check_parity(phi) for phi in phis])[0]

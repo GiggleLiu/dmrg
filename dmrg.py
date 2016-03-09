@@ -7,7 +7,7 @@ from scipy.sparse.linalg import eigsh
 from scipy.linalg import eigh,norm,svd
 from matplotlib.pyplot import *
 import scipy.sparse as sps
-import copy,time,pdb,warnings
+import copy,time,pdb,warnings,numbers
 
 from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker
 from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString,tensor
@@ -121,16 +121,20 @@ class DMRGEngine(object):
             raise NotImplementedError('The symmetric Handler can not without Block marker generator!')
 
         nsite=self.hchain.nsite
-        if endpoint is None: endpoint=(5,'->',nsite-2)
+        if endpoint is None: endpoint=(4,'<-',0)
         maxscan,end_direction,end_site=endpoint
         if ndim(maxN)==0:
             maxN=[maxN]*maxscan
-        assert(len(maxN)>=maxscan and end_site<=nsite-2)
+        assert(len(maxN)>=maxscan and end_site<=(nsite-2 if not self.reflect else nsite/2-1))
         EG_PRE=Inf
         initial_state=None
+        if self.reflect:
+            iterators={'->':xrange(nsite/2),'<-':xrange(nsite/2-2,-1,-1)}
+        else:
+            iterators={'->':xrange(nsite-1),'<-':xrange(nsite-2,-1,-1)}
         for n,m in enumerate(maxN):
-            for direction,iterator in zip(['->','<-'],[xrange(nsite-1),xrange(nsite-2,-1,-1)]):
-                for i in iterator:
+            for direction in ['->','<-']:
+                for i in iterators[direction]:
                     print 'Running %s-th scan, iteration %s'%(n+1,i)
                     t0=time.time()
                     #setup generators and operators.
@@ -157,20 +161,21 @@ class DMRGEngine(object):
                         print 'setting %s(%s)-site of right'%(nsite-i-1,hgen_r.N)
                         self.set('r',hgen_r,nsite-i-1)
 
-                    if direction=='->' and i==nsite-2:  #fix tails
-                        self.update_tail(phil[0],nsite=nsite)
-
                     #do state prediction
                     initial_state=None   #restore initial state.
+                    phi=phil[0]
                     if nsite==nsite_true:
                         if self.reflect and nsite%2==0 and ((i==nsite/2-2 and direction=='->') or (i==nsite/2 and direction=='<-')):
                             initial_state=None
-                        elif direction=='->' and i==nsite-2:
+                        elif direction=='->' and i==nsite-2:  #for the case without reflection.
                             initial_state=phil[0].ravel()
                         elif direction=='<-' and i==0:
                             initial_state=phil[0].ravel()
                         else:
-                            initial_state=sum([self.state_prediction(phi,hgen_l=hgen_l,hgen_r=hgen_r,direction=direction) for phi in phil],axis=0)
+                            if self.reflect and direction=='->' and i==nsite/2-1:
+                                direction='<-'
+                                #phi=transpose(phi,[2,3,0,1])
+                            initial_state=sum([self.state_prediction(phi,l=i+1,direction=direction) for phi in phil],axis=0)
                             initial_state=initial_state.ravel()
 
                     EG=EG/nsite_true
@@ -186,10 +191,10 @@ class DMRGEngine(object):
                         print 'MidPoint -> EG = %s, dE = %s'%(EG,diff)
                         if n==maxscan-1:
                             print 'Breaking due to maximum scan reached!'
-                            return EG,self.get_mps2(phi=phil[0],hgen_r=hgen_r,hgen_l=hgen_l,direction=direction)
-                        elif all(abs(diff)<tol):
-                            print 'Breaking due to enough precision reached!'
-                            return EG,self.get_mps2(phi=phil[0],hgen_r=hgen_r,hgen_l=hgen_l,direction=direction)
+                            return EG,self.get_mps(phi=phil[0],hgen_r=hgen_r,hgen_l=hgen_l,direction=direction)
+                        #elif all(abs(diff)<tol):
+                        #    print 'Breaking due to enough precision reached!'
+                        #    return EG,self.get_mps(phi=phil[0],hgen_r=hgen_r,hgen_l=hgen_l,direction=direction)
                         else:
                             EG_PRE=EG
 
@@ -314,13 +319,14 @@ class DMRGEngine(object):
             initial_state=random.random(H.shape[0])
         if not symm_handler.isnull:
             if hgen_l.N!=hgen_r.N or (not self.reflect and not (hgen_l is hgen_r)):  #forbidden using C2 symmetry at NL!=NR
+            #if hgen_l is not hgen_r:
                 symm_handler.update_handlers(useC=False)
             else:
                 nl=bml.antiblockize(int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2)
                 symm_handler.update_handlers(n=nl,useC=True)
             #v00=symm_handler.project_state(phi=initial_state)
             v00=initial_state
-            H=symm_handler.project_op(op=H)
+            #H=symm_handler.project_op(op=H)
             assert(symm_handler.check_op(H))
         else:
             v00=initial_state
@@ -344,7 +350,7 @@ class DMRGEngine(object):
             v0=bm_tot.lextract_block(bm_tot.blockize(v00),target_block)
 
         ##second, diagonalize to get desired number of levels
-        detect_C2=symm_handler.target_sector.has_key('C') and not symm_handler.useC
+        detect_C2=symm_handler.target_sector.has_key('C')# and not symm_handler.useC
         k=max(nlevel,symm_handler.C_detect_scope if detect_C2 else 1)
         #M=None# if len(symm_handler.symms)==0 else symm_handler.get_projector()
         if Hc.shape[0]<400:
@@ -365,30 +371,65 @@ class DMRGEngine(object):
                     for i in xrange(v.shape[-1])])
         else:
             vl=v.T
-        if len(symm_handler.symms)==0:
-            assert(all([symm_handler.check_parity(vi) for vi in vl]))
+        if not symm_handler.isnull:
+            indices=symm_handler.locate(vl)
+            print 'We find %s states meeting requirements.'%len(indices)
+            e,vl=e[indices],vl[indices]
         overlaps=array([abs(v00.dot(vi.conj()))/norm(v0)/norm(vi) for vi in vl])
-        if detect_C2:
-            mask=overlaps>0.5
-            e,vl,overlaps=e[mask],vl[mask],overlaps[mask]
-            assert(len(vl)>=nlevel)
-            vl=vl[:nlevel]
-        print 'The goodness of the estimate -> %s'%(overlaps)
+        if len(vl)>1:
+            ind=argmax(overlaps)
+            e,vl,overlaps=array([e[ind]]),[vl[ind]],[overlaps[ind]]
+        print 'The goodness of the estimate -> %s'%(overlaps[0])
         t2=time.time()
-        vl=[v.reshape([ndiml,ndimr]) for v in vl]
-        for v in vl:
-            v[abs(v)<ZERO_REF]=0
+
+        #do-wavefunction analysis
+        U,spec,V=self.direct_analysis(phis=vl,bml=bml,bmr=bmr);V=V.T.conj()
+        spec_1,U1=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='l')
+        spec_2,V1=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='r')
+        pdb.set_trace()
+
+        #do truncation
+        kpmask=zeros(U.shape[1],dtype='bool')
+        spec_cut=sort(spec)[max(0,len(kpmask)-maxN)]
+        kpmask[(spec>=spec_cut)&(spec>ZERO_REF)]=True
+        print '%s states kept.'%sum(kpmask)
+        trunc_error=sum(spec[~kpmask])
+        hgen_l.trunc(U=U,block_marker=bml,kpmask=kpmask)
+        if not (hgen_l.N==hgen_r.N and self.reflect):
+            hgen_r.trunc(U=V,block_marker=bmr,kpmask=kpmask)
+        t3=time.time()
+        print 'Elapse -> total:%s, eigen:%s'%(t3-t0,t2-t1)
+        phil=[phi.toarray().reshape([ndiml/hndim,hndim,ndimr/hndim,hndim]) for phi in phil]
+        return e,U,kpmask,trunc_error,phil
+
+    def rdm_analysis(self,phis,bml,bmr,side):
+        '''
+        The analysis of reduced density matrix.
+        
+        Parameters:
+            :phis: list of 1D array, the kept eigen states of current iteration.
+            :bml/bmr: <BlockMarker>/int, the block marker for left and right blocks/or the dimensions.
+            :side: 'l'/'r', view the left or right side as the system.
+
+        Return:
+            tuple of (spec, U), the spectrum and Unitary matrix from the density matrix.
+        '''
+        assert(side=='l' or side=='r')
+        ndiml,ndimr=(bml,bmr) if isinstance(bml,numbers.Number) else (bml.N,bmr.N)
+        phis=[phi.reshape([ndiml,ndimr]) for phi in phis]
+        for phi in phis:
+            phi[abs(phi)<ZERO_REF]=0
         rho=0
         phil=[]
-        if direction=='->':
-            for v in vl:
-                phi=sps.csr_matrix(v)
+        if side=='l':
+            for phi in phis:
+                phi=sps.csr_matrix(phi)
                 rho=rho+phi.dot(phi.T.conj())
                 phil.append(phi)
             bm=bml
         else:
-            for v in vl:
-                phi=sps.csc_matrix(v)
+            for phi in phis:
+                phi=sps.csc_matrix(phi)
                 rho=rho+phi.T.dot(phi.conj())
                 phil.append(phi)
             bm=bmr
@@ -403,29 +444,46 @@ class DMRGEngine(object):
         1. make sure your are using additive good quantum numbers.
         2. avoid ground state degeneracy.''')
         spec,U,bm,rho_b=eigbh(rho,bm=bm)
-        print 'Find %s(%s) blocks.'%(bm.nblock,bm.nblock)
+        print 'With %s(%s) blocks.'%(bm.nblock,bm.nblock)
+        return spec,U
 
-        kpmask=zeros(U.shape[1],dtype='bool')
-        spec_cut=sort(spec)[max(0,len(kpmask)-maxN)]
-        kpmask[(spec>=spec_cut)&(spec>ZERO_REF)]=True
-        print '%s states kept.'%sum(kpmask)
-        trunc_error=sum(spec[~kpmask])
-        if direction=='->':
-            hgen_l.trunc(U=U,block_marker=bm,kpmask=kpmask)
-        else:
-            hgen_r.trunc(U=U,block_marker=bm,kpmask=kpmask)
-        t3=time.time()
-        print 'Elapse -> total:%s, eigen:%s'%(t3-t0,t2-t1)
-        phil=[phi.toarray().reshape([ndiml/hndim,hndim,ndimr/hndim,hndim]) for phi in phil]
-        return e,U,kpmask,trunc_error,phil
+    def direct_analysis(self,phis,bml,bmr):
+        '''
+        The direct analysis of state(svd).
+        
+        Parameters:
+            :phis: list of 1D array, the kept eigen states of current iteration.
+            :bml/bmr: <BlockMarker>/int, the block marker for left and right blocks/or the dimensions.
 
-    def state_prediction(self,phi,hgen_l,hgen_r,direction):
+        Return:
+            tuple of (spec, U), the spectrum and Unitary matrix from the density matrix.
+        '''
+        assert(side=='l' or side=='r')
+        ndiml,ndimr=(bml,bmr) if isinstance(bml,numbers.Number) else (bml.N,bmr.N)
+        phi=sum(phis,axis=0).reshape([ndiml,ndimr])/sqrt(len(phis))  #construct wave function of equal distribution of all states.
+        for phi in phis:
+            phi[abs(phi)<ZERO_REF]=0
+        if bm is not None:
+            phi=dbl_blockize(phi,bml,bmr)
+            if not dbl_check_blockdiag(phi,bml,bmr,tol=1e-5):
+                ion()
+                pcolor(exp(abs(rho.toarray().real)))
+                bm.show()
+                pdb.set_trace()
+                raise Exception('''Density matrix is not block diagonal, which is not expected,
+        1. make sure your are using additive good quantum numbers.
+        2. avoid ground state degeneracy.''')
+        spec,U,rho_b=dbl_svd(rho,bml=bml,bmr=bmr)
+        print 'With %s, %s blocks.'%(bml.nblock,bmr.nblock)
+        return spec,U
+
+    def state_prediction(self,phi,l,direction):
         '''
         Predict the state for the next iteration.
 
         Parameters:
             :phi: ndarray, the state from the last iteration, [llink, site1, rlink, site2]
-            :hgen_l/hgen_r: <RGHGen>, the hamiltonian generator for the left/right block.
+            :l: int, the current division point, the size of left block.
             :direction: '->'/'<-', the moving direction.
 
         Return:
@@ -435,8 +493,9 @@ class DMRGEngine(object):
         '''
         assert(direction=='<-' or direction=='->')
         phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
-        NL,NR=hgen_l.N,hgen_r.N
-        nsite=NL+NR
+        nsite=self.hchain.nsite
+        NL,NR=l,nsite-l
+        hgen_l,hgen_r=self.query('l',NL),self.query('r',NR)
         lr=NR-2 if direction=='->' else NR-1
         ll=NL-1 if direction=='->' else NL-2
         A=hgen_l.evolutor.A(ll,dense=True)   #get A[sNL](NL-1,NL)
@@ -463,43 +522,7 @@ class DMRGEngine(object):
                 phi=phi*(1-2*(n_tot%2))
         return phi
 
-    def update_tail(self,phi,nsite):
-        '''
-        update the last transform matrix.
-        '''
-        hgen_l=self.query('l',nsite-1)
-        phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
-        A=hgen_l.evolutor.A(nsite-2,dense=True)
-        A=tensor.Tensor(A,labels=['sl+1','al','al+1']).conj()
-        phi=tensor.contract([A,phi])
-        phi=phi.chorder([2,0,1])
-        self._tails=[phi]
-        #self._tails=[einsum('ijk,jiml->lkm',A.conj(),phi) for phi in phil]  #A(osite,llink,rlink), phi(llink,osite,nsite)
-
-    def get_mps(self,labels=('s','a'),target_level=0):
-        '''
-        Transform <Evolutor> instance to <MPS> instance.
-
-        Parameters:
-            :labels: tuple of char,
-                (label_site,label_link), The labels for degree of freedom on site and intersite links.
-            :target_level: int, the n-th lowest level, 0 for ground state.
-
-        Return:
-            <MPS>, the desired matrix product state.
-
-            Note: this mps is right canonical.
-        '''
-        hgen=self.query('l',self.hchain.nsite-1)
-        tail=self._tails[target_level]
-        #ML=[chorder(ai,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for ai in [tail]+hgen.evolutor.get_AL(dense=True)[::-1]]
-        #mps=MPS(AL=[],BL=ML,S=ones(1),labels=labels)
-        ML=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]).conj() for ai in hgen.evolutor.get_AL(dense=True)+[tail]]
-        mps=MPS(AL=ML,BL=[],S=ones(1),labels=labels)
-        print [shape(ai) for ai in ML]
-        return mps
-
-    def get_mps2(self,phi,hgen_l,hgen_r,labels=['s','a'],direction=None):
+    def get_mps(self,phi,hgen_l,hgen_r,labels=['s','a'],direction=None):
         '''
         Get the MPS from run-time phi, and evolution matrices.
 
