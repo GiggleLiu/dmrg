@@ -331,7 +331,7 @@ class SymmetryHandler(object):
         '''
         overlap=abs(phi.dot(self.project_state(phi).conj()))/norm(phi)**2
         print 'Checking symmetry and get overlap -> %s'%overlap
-        return overlap>0.5
+        return overlap>0.45
 
     def locate(self,phis):
         '''

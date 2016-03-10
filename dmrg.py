@@ -113,7 +113,7 @@ class DMRGEngine(object):
         #check the validity of datas.
         if isinstance(self.hgen.evolutor,NullEvolutor):
             raise ValueError('The evolutor must not be null!')
-        symm_handler=SymmetryHandler(dict(block_params.get('target_sector',{})),C_detect_scope=block_params.get('C_detect_scope',3))
+        symm_handler=SymmetryHandler(dict(block_params.get('target_sector',{})),C_detect_scope=block_params.get('C_detect_scope',2))
         nlevel=block_params.get('nlevel',1)
         if not symm_handler.isnull and nlevel!=1:
             raise NotImplementedError('The symmetric Handler can not be used in multi-level calculation!')
@@ -327,7 +327,8 @@ class DMRGEngine(object):
             #v00=symm_handler.project_state(phi=initial_state)
             v00=initial_state
             #H=symm_handler.project_op(op=H)
-            assert(symm_handler.check_op(H))
+            if hgen_l is hgen_r:
+                assert(symm_handler.check_op(sum(Hin)))
         else:
             v00=initial_state
 
@@ -346,8 +347,8 @@ class DMRGEngine(object):
             bm_tot=self.bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
             H_bd=bm_tot.blockize(H)
 
-            Hc=bm_tot.lextract_block(H_bd,target_block)
-            v0=bm_tot.lextract_block(bm_tot.blockize(v00),target_block)
+            Hc=bm_tot.lextract_block(H_bd,(target_block,target_block))
+            v0=bm_tot.lextract_block(bm_tot.blockize(v00),(target_block,))
 
         ##second, diagonalize to get desired number of levels
         detect_C2=symm_handler.target_sector.has_key('C')# and not symm_handler.useC
@@ -367,26 +368,32 @@ class DMRGEngine(object):
         if bm_tot is not None:
             bindex=bm_tot.labels.index(target_block)
             vl=array([bm_tot.antiblockize(sps.coo_matrix((v[:,i],(arange(bm_tot.Nr[bindex],\
-                    bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128')).toarray().ravel()\
+                    bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128').toarray(),axes=(0,)).ravel()\
                     for i in xrange(v.shape[-1])])
         else:
             vl=v.T
-        if not symm_handler.isnull:
+        pdb.set_trace()
+        overlaps=array([abs(v00.dot(vi.conj()))/norm(v00)/norm(vi) for vi in vl])
+        if detect_C2 and symm_handler.useC:  #use symmetry projection to detect C2
             indices=symm_handler.locate(vl)
-            print 'We find %s states meeting requirements.'%len(indices)
-            e,vl=e[indices],vl[indices]
-        overlaps=array([abs(v00.dot(vi.conj()))/norm(v0)/norm(vi) for vi in vl])
-        if len(vl)>1:
+            print e
+            print 'We find %s states meeting requirements, will take 1.'%len(indices)
+            e,vl=array([e[indices[0]]]),[vl[indices[0]]]
+        elif detect_C2:  #use state prediction to detect C2
             ind=argmax(overlaps)
             e,vl,overlaps=array([e[ind]]),[vl[ind]],[overlaps[ind]]
         print 'The goodness of the estimate -> %s'%(overlaps[0])
         t2=time.time()
 
         #do-wavefunction analysis
+        for v in vl:
+            v[abs(v)<ZERO_REF]=0
         U,spec,V=self.direct_analysis(phis=vl,bml=bml,bmr=bmr);V=V.T.conj()
-        spec_1,U1=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='l')
-        spec_2,V1=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='r')
+        print len(vl)
         pdb.set_trace()
+        #spec,U=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='l')
+        #spec_2,V1=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='r')
+        #pdb.set_trace()
 
         #do truncation
         kpmask=zeros(U.shape[1],dtype='bool')
@@ -399,7 +406,7 @@ class DMRGEngine(object):
             hgen_r.trunc(U=V,block_marker=bmr,kpmask=kpmask)
         t3=time.time()
         print 'Elapse -> total:%s, eigen:%s'%(t3-t0,t2-t1)
-        phil=[phi.toarray().reshape([ndiml/hndim,hndim,ndimr/hndim,hndim]) for phi in phil]
+        phil=[phi.reshape([ndiml/hndim,hndim,ndimr/hndim,hndim]) for phi in vl]
         return e,U,kpmask,trunc_error,phil
 
     def rdm_analysis(self,phis,bml,bmr,side):
@@ -417,8 +424,6 @@ class DMRGEngine(object):
         assert(side=='l' or side=='r')
         ndiml,ndimr=(bml,bmr) if isinstance(bml,numbers.Number) else (bml.N,bmr.N)
         phis=[phi.reshape([ndiml,ndimr]) for phi in phis]
-        for phi in phis:
-            phi[abs(phi)<ZERO_REF]=0
         rho=0
         phil=[]
         if side=='l':
@@ -443,39 +448,55 @@ class DMRGEngine(object):
                 raise Exception('''Density matrix is not block diagonal, which is not expected,
         1. make sure your are using additive good quantum numbers.
         2. avoid ground state degeneracy.''')
-        spec,U,bm,rho_b=eigbh(rho,bm=bm)
+        spec,U=eigbh(rho,bm=bm)
         print 'With %s(%s) blocks.'%(bm.nblock,bm.nblock)
         return spec,U
 
-    def direct_analysis(self,phis,bml,bmr):
+    def direct_analysis(self,phis,bml,bmr,tol=1e-8):
         '''
         The direct analysis of state(svd).
         
         Parameters:
             :phis: list of 1D array, the kept eigen states of current iteration.
             :bml/bmr: <BlockMarker>/int, the block marker for left and right blocks/or the dimensions.
+            :tol: float, the maximum allowed truncation error.
 
         Return:
             tuple of (spec, U), the spectrum and Unitary matrix from the density matrix.
         '''
-        assert(side=='l' or side=='r')
-        ndiml,ndimr=(bml,bmr) if isinstance(bml,numbers.Number) else (bml.N,bmr.N)
+        if isinstance(bml,numbers.Number):
+            use_bm=False
+            ndiml,ndimr=bml,bmr
+        else:
+            ndiml,ndimr=bml.N,bmr.N
+            use_bm=True
         phi=sum(phis,axis=0).reshape([ndiml,ndimr])/sqrt(len(phis))  #construct wave function of equal distribution of all states.
-        for phi in phis:
-            phi[abs(phi)<ZERO_REF]=0
-        if bm is not None:
-            phi=dbl_blockize(phi,bml,bmr)
-            if not dbl_check_blockdiag(phi,bml,bmr,tol=1e-5):
-                ion()
-                pcolor(exp(abs(rho.toarray().real)))
-                bm.show()
-                pdb.set_trace()
+        phi[abs(phi)<ZERO_REF]=0
+        if use_bm:
+            phi=bml.blockize(phi,axes=(0,))
+            phi=bmr.blockize(phi,axes=(1,))
+
+        rhol=phi.dot(phi.T.conj())
+        rhor=phi.T.conj().dot(phi)
+
+        if bml is not None:
+            if not bml.check_blockdiag(rhol,tol=1e-5) or not bmr.check_blockdiag(rhor,tol=1e-5):
                 raise Exception('''Density matrix is not block diagonal, which is not expected,
         1. make sure your are using additive good quantum numbers.
         2. avoid ground state degeneracy.''')
-        spec,U,rho_b=dbl_svd(rho,bml=bml,bmr=bmr)
-        print 'With %s, %s blocks.'%(bml.nblock,bmr.nblock)
-        return spec,U
+        spec,U=eigbh(rhol,bm=bml,return_vecs=True)
+        kpmask=spec>tol
+        spec,U=spec[kpmask],U.tocsc()[:,kpmask]
+        #using phi=USV to get V
+        V=U.T.conj().dot(phi)/sqrt(spec[:,newaxis])   #V is row-wise othorgonal
+        #spec2,V=eigbh(rhor,bm=bmr,return_vecs=True);V=V.T.conj()
+
+        #check phi
+        assert(allclose(V.dot(V.T.conj()),identity(V.shape[0])))
+        phi2=U.dot(sps.diags(sqrt(spec),0)).dot(V)
+        assert(sum(phi2*phi.conj())>0.9)
+ 
+        return U,spec,V
 
     def state_prediction(self,phi,l,direction):
         '''
