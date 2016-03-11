@@ -9,7 +9,7 @@ from matplotlib.pyplot import *
 import scipy.sparse as sps
 import copy,time,pdb,warnings,numbers
 
-from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker
+from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker,svdb
 from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString,tensor
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
 from rglib.hexpand import signlib
@@ -119,13 +119,15 @@ class DMRGEngine(object):
             raise NotImplementedError('The symmetric Handler can not be used in multi-level calculation!')
         if not symm_handler.isnull and self.bmg is None:
             raise NotImplementedError('The symmetric Handler can not without Block marker generator!')
+        if 'C' in symm_handler.symms and not self.reflect:
+            raise Exception('Using C2 symmetry without reflection symmetry is unreliable, forbiden for safety!')
 
         nsite=self.hchain.nsite
         if endpoint is None: endpoint=(4,'<-',0)
         maxscan,end_direction,end_site=endpoint
         if ndim(maxN)==0:
             maxN=[maxN]*maxscan
-        assert(len(maxN)>=maxscan and end_site<=(nsite-2 if not self.reflect else nsite/2-1))
+        assert(len(maxN)>=maxscan and end_site<=(nsite-2 if not self.reflect else nsite/2-2))
         EG_PRE=Inf
         initial_state=None
         if self.reflect:
@@ -138,8 +140,11 @@ class DMRGEngine(object):
                     print 'Running %s-th scan, iteration %s'%(n+1,i)
                     t0=time.time()
                     #setup generators and operators.
+                    #The cases to use identical hamiltonian generator,
+                    #1. the first half of first scan.
+                    #2. the reflection is used and left block is same length with right block.
                     hgen_l=self.query('l',i)
-                    if n==0 and direction=='->' and i<(nsite+1)/2:
+                    if (n==0 and direction=='->' and i<(nsite+1)/2) or (self.reflect and i==(nsite/2) and nsite%2==0):
                         hgen_r=hgen_l
                     else:
                         hgen_r=self.query('r',nsite-i-2)
@@ -149,17 +154,17 @@ class DMRGEngine(object):
                     nsite_true=hgen_l.N+hgen_r.N+2
 
                     #run a step
-                    EG,U,kpmask,err,phil=self.dmrg_step(hgen_l,hgen_r,opi,direction=direction,tol=tol,maxN=m,block_params=block_params,initial_state=initial_state,symm_handler=symm_handler)
+                    EG,err,phil=self.dmrg_step(hgen_l,hgen_r,opi,direction=direction,tol=tol,maxN=m,block_params=block_params,initial_state=initial_state,symm_handler=symm_handler)
                     #update LPART and RPART
-                    if direction=='->':
-                        self.set('l',hgen_l,i+1)
-                        print 'setting %s(%s)-site of left'%(i+1,hgen_l.N)
-                        if n==0 and i<(nsite-1)/2:
-                            print 'setting %s(%s)-site of right'%(i+1,hgen_l.N)
-                            self.set('r',hgen_l,i+1)
-                    else:
-                        print 'setting %s(%s)-site of right'%(nsite-i-1,hgen_r.N)
-                        self.set('r',hgen_r,nsite-i-1)
+                    print 'setting %s-site of left and %s-site of right.'%(hgen_l.N,hgen_r.N)
+                    self.set('l',hgen_l,hgen_l.N)
+                    print 'set L = %s'%hgen_l.N
+                    if hgen_l.N!=hgen_r.N or (not self.reflect):
+                        #Note: Condition for setting up the right block,
+                        #1. when the left and right part are not equal length or
+                        #2. when the reflection is not used.
+                        self.set('r',hgen_r,hgen_r.N)
+                        print 'set R = %s'%hgen_r.N
 
                     #do state prediction
                     initial_state=None   #restore initial state.
@@ -174,7 +179,6 @@ class DMRGEngine(object):
                         else:
                             if self.reflect and direction=='->' and i==nsite/2-1:
                                 direction='<-'
-                                #phi=transpose(phi,[2,3,0,1])
                             initial_state=sum([self.state_prediction(phi,l=i+1,direction=direction) for phi in phil],axis=0)
                             initial_state=initial_state.ravel()
 
@@ -191,10 +195,7 @@ class DMRGEngine(object):
                         print 'MidPoint -> EG = %s, dE = %s'%(EG,diff)
                         if n==maxscan-1:
                             print 'Breaking due to maximum scan reached!'
-                            return EG,self.get_mps(phi=phil[0],hgen_r=hgen_r,hgen_l=hgen_l,direction=direction)
-                        #elif all(abs(diff)<tol):
-                        #    print 'Breaking due to enough precision reached!'
-                        #    return EG,self.get_mps(phi=phil[0],hgen_r=hgen_r,hgen_l=hgen_l,direction=direction)
+                            return EG,self.get_mps(phi=phil[0],l=i+1,direction=direction)
                         else:
                             EG_PRE=EG
 
@@ -231,7 +232,7 @@ class DMRGEngine(object):
             t0=time.time()
             opi=unique(self.hchain.query(i)+self.hchain.query(i+1))
             opi=filter(lambda op:all(array(op.siteindex)<=(2*hgen.N+1)),opi)
-            EG,U,kpmask,err,phil=self.dmrg_step(hgen,hgen,opi,tol=tol,block_params=block_params,symm_handler=symm_handler)
+            EG,err,phil=self.dmrg_step(hgen,hgen,opi,tol=tol,block_params=block_params,symm_handler=symm_handler)
             EG=EG/(2.*(i+1))
             if len(EL)>0:
                 diff=EG-EL[-1]
@@ -284,6 +285,7 @@ class DMRGEngine(object):
             else:
                 interop.append(op)
         HL0=hgen_l.expand(intraop_l)
+        #expansion can not do twice to the same hamiltonian generator!
         if hgen_r is hgen_l:
             HR0=HL0
         else:
@@ -295,7 +297,7 @@ class DMRGEngine(object):
             target_block=block_params.get('target_block')
             n=max(hgen_l.N,hgen_r.N)
             if isinstance(hgen_l.evolutor,MaskedEvolutor) and n>1:
-                kpmask_l=hgen_l.evolutor.kpmask(hgen_l.N-2)
+                kpmask_l=hgen_l.evolutor.kpmask(hgen_l.N-2)     #kpmask is also related to block marker!!!
                 kpmask_r=hgen_r.evolutor.kpmask(hgen_r.N-2)
             else:
                 kpmask_l=kpmask_r=None
@@ -306,20 +308,22 @@ class DMRGEngine(object):
             bmr=None #get_blockmarker(HR0)
 
         H=kron(HL0,sps.identity(ndimr))+kron(sps.identity(ndiml),HR0)
+        #get the link hamiltonians
         sb=SuperBlock(hgen_l,hgen_r)
         Hin=[]
         for op in interop:
             Hin.append(sb.get_op(op))
         H=H+sum(Hin)
 
-        #get the starting initial eigen state!
-        #(e,),v=eigsh(H,which='SA',k=1)
+        #get the starting eigen state v00!
         t1=time.time()
         if initial_state is None:
             initial_state=random.random(H.shape[0])
         if not symm_handler.isnull:
-            if hgen_l.N!=hgen_r.N or (not self.reflect and not (hgen_l is hgen_r)):  #forbidden using C2 symmetry at NL!=NR
-            #if hgen_l is not hgen_r:
+            if hgen_l.N!=hgen_r.N or (not self.reflect and not (hgen_l is hgen_r)):
+                #Note, The cases to disable C2 symmetry,
+                #1. NL!=NR
+                #2. NL==NR, reflection is not used(and not the first iteration).
                 symm_handler.update_handlers(useC=False)
             else:
                 nl=bml.antiblockize(int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2)
@@ -328,12 +332,12 @@ class DMRGEngine(object):
             v00=initial_state
             #H=symm_handler.project_op(op=H)
             if hgen_l is hgen_r:
-                assert(symm_handler.check_op(sum(Hin)))
+                assert(symm_handler.check_op(H))
         else:
             v00=initial_state
 
         #perform diagonalization
-        ##first, detect specific block for diagonalization, get Hc and v0
+        ##1. detect specific block for diagonalization, get Hc and v0
         if self.bmg is None or target_block is None:
             Hc=H
             bm_tot=None
@@ -350,7 +354,7 @@ class DMRGEngine(object):
             Hc=bm_tot.lextract_block(H_bd,(target_block,target_block))
             v0=bm_tot.lextract_block(bm_tot.blockize(v00),(target_block,))
 
-        ##second, diagonalize to get desired number of levels
+        ##2. diagonalize to get desired number of levels
         detect_C2=symm_handler.target_sector.has_key('C')# and not symm_handler.useC
         k=max(nlevel,symm_handler.C_detect_scope if detect_C2 else 1)
         #M=None# if len(symm_handler.symms)==0 else symm_handler.get_projector()
@@ -364,7 +368,7 @@ class DMRGEngine(object):
                 e,v=eigsh(Hc,k=k+1,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0)
         order=argsort(e)
         e,v=e[order],v[:,order]
-        ###roll back blocks
+        ##3. permute back eigen-vectors into original representation al,sl+1,sl+2,al+2
         if bm_tot is not None:
             bindex=bm_tot.labels.index(target_block)
             vl=array([bm_tot.antiblockize(sps.coo_matrix((v[:,i],(arange(bm_tot.Nr[bindex],\
@@ -372,7 +376,10 @@ class DMRGEngine(object):
                     for i in xrange(v.shape[-1])])
         else:
             vl=v.T
-        pdb.set_trace()
+
+        #Get the overlap with the original state and detect the specific C2 block.
+        #using state prediction if blocks are asymmetric.
+        #using symmetry handler if blocks are symmetric.
         overlaps=array([abs(v00.dot(vi.conj()))/norm(v00)/norm(vi) for vi in vl])
         if detect_C2 and symm_handler.useC:  #use symmetry projection to detect C2
             indices=symm_handler.locate(vl)
@@ -385,31 +392,71 @@ class DMRGEngine(object):
         print 'The goodness of the estimate -> %s'%(overlaps[0])
         t2=time.time()
 
-        #do-wavefunction analysis
+        #Do-wavefunction analysis, preliminary truncation is performed(up to ZERO_REF).
         for v in vl:
             v[abs(v)<ZERO_REF]=0
-        U,spec,V=self.direct_analysis(phis=vl,bml=bml,bmr=bmr);V=V.T.conj()
-        print len(vl)
-        pdb.set_trace()
-        #spec,U=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='l')
-        #spec_2,V1=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='r')
-        #pdb.set_trace()
-
-        #do truncation
-        kpmask=zeros(U.shape[1],dtype='bool')
-        spec_cut=sort(spec)[max(0,len(kpmask)-maxN)]
-        kpmask[(spec>=spec_cut)&(spec>ZERO_REF)]=True
-        print '%s states kept.'%sum(kpmask)
-        trunc_error=sum(spec[~kpmask])
-        hgen_l.trunc(U=U,block_marker=bml,kpmask=kpmask)
-        if not (hgen_l.N==hgen_r.N and self.reflect):
-            hgen_r.trunc(U=V,block_marker=bmr,kpmask=kpmask)
+        #spec1,U1,kpmask1,trunc_error=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='l',maxN=maxN)
+        U1,specs,U2,(kpmask1,kpmask2),trunc_error=self.svd_analysis(phis=vl,bml=bml,bmr=bmr,maxN=maxN,target_block=target_block)
+        print '%s states kept.'%sum(kpmask1)
+        hgen_l.trunc(U=U1,block_marker=bml,kpmask=kpmask1)  #kpmask is also important for setting up the sign
+        if hgen_l is not hgen_r and not (hgen_l.N==hgen_r.N and self.reflect):
+            #spec2,U2,kpmask2,trunc_error=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='r',maxN=maxN)
+            hgen_r.trunc(U=U2,block_marker=bmr,kpmask=kpmask2)
         t3=time.time()
         print 'Elapse -> total:%s, eigen:%s'%(t3-t0,t2-t1)
         phil=[phi.reshape([ndiml/hndim,hndim,ndimr/hndim,hndim]) for phi in vl]
-        return e,U,kpmask,trunc_error,phil
+        return e,trunc_error,phil
 
-    def rdm_analysis(self,phis,bml,bmr,side):
+    def svd_analysis(self,phis,bml,bmr,maxN,target_block):
+        '''
+        The direct analysis of state(svd).
+        
+        Parameters:
+            :phis: list of 1D array, the kept eigen states of current iteration.
+            :bml/bmr: <BlockMarker>/int, the block marker for left and right blocks/or the dimensions.
+            :maxN: int, the maximum kept values.
+            :target_block: tuple/int, the block label of the state.
+
+        Return:
+            tuple of (spec, U), the spectrum and Unitary matrix from the density matrix.
+        '''
+        if isinstance(bml,numbers.Number):
+            use_bm=False
+            ndiml,ndimr=bml,bmr
+        else:
+            ndiml,ndimr=bml.N,bmr.N
+            use_bm=True
+        phi=sum(phis,axis=0).reshape([ndiml,ndimr])/sqrt(len(phis))  #construct wave function of equal distribution of all states.
+        phi[abs(phi)<ZERO_REF]=0
+        if use_bm:
+            phi=bml.blockize(phi,axes=(0,))
+            phi=bmr.blockize(phi,axes=(1,))
+        def mapping_rule(bli):
+            res=self.bmg.labels_sub([target_block],[bli])[0]
+            try:
+                return res.item()
+            except:
+                return tuple(res)
+        U,S,V,S2=svdb(phi,bm=bml,bm2=bmr,mapping_rule=mapping_rule,full_matrices=True);U2=V.T.conj()
+        spec_l=S.dot(S.T.conj()).diagonal().real
+        spec_r=S2.T.conj().dot(S2).diagonal().real
+
+        if bml is not None:
+            if not (bml.check_blockdiag(U.dot(sps.diags(spec_l,0)).dot(U.T.conj())) and\
+                    bmr.check_blockdiag((V.T.conj().dot(sps.diags(spec_r,0))).dot(V))):
+                raise Exception('''Density matrix is not block diagonal, which is not expected,
+        1. make sure your are using additive good quantum numbers.
+        2. avoid ground state degeneracy.''')
+        kpmasks=[]
+        for Ui,spec in zip([U,U2],[spec_l,spec_r]):
+            kpmask=zeros(Ui.shape[1],dtype='bool')
+            spec_cut=sort(spec)[max(0,Ui.shape[0]-maxN)]
+            kpmask[(spec>=spec_cut)&(spec>ZERO_REF)]=True
+            trunc_error=sum(spec[~kpmask])
+            kpmasks.append(kpmask)
+        return U,(spec_l,spec_r),U2,kpmasks,trunc_error
+
+    def rdm_analysis(self,phis,bml,bmr,side,maxN):
         '''
         The analysis of reduced density matrix.
         
@@ -417,6 +464,7 @@ class DMRGEngine(object):
             :phis: list of 1D array, the kept eigen states of current iteration.
             :bml/bmr: <BlockMarker>/int, the block marker for left and right blocks/or the dimensions.
             :side: 'l'/'r', view the left or right side as the system.
+            :maxN: the maximum kept values.
 
         Return:
             tuple of (spec, U), the spectrum and Unitary matrix from the density matrix.
@@ -449,54 +497,13 @@ class DMRGEngine(object):
         1. make sure your are using additive good quantum numbers.
         2. avoid ground state degeneracy.''')
         spec,U=eigbh(rho,bm=bm)
+        kpmask=zeros(U.shape[1],dtype='bool')
+        spec_cut=sort(spec)[max(0,U.shape[0]-maxN)]
+        kpmask[(spec>=spec_cut)&(spec>ZERO_REF)]=True
+        trunc_error=sum(spec[~kpmask])
+        #spec,U=spec[kpmask],U.tocsc()[:,kpmask]
         print 'With %s(%s) blocks.'%(bm.nblock,bm.nblock)
-        return spec,U
-
-    def direct_analysis(self,phis,bml,bmr,tol=1e-8):
-        '''
-        The direct analysis of state(svd).
-        
-        Parameters:
-            :phis: list of 1D array, the kept eigen states of current iteration.
-            :bml/bmr: <BlockMarker>/int, the block marker for left and right blocks/or the dimensions.
-            :tol: float, the maximum allowed truncation error.
-
-        Return:
-            tuple of (spec, U), the spectrum and Unitary matrix from the density matrix.
-        '''
-        if isinstance(bml,numbers.Number):
-            use_bm=False
-            ndiml,ndimr=bml,bmr
-        else:
-            ndiml,ndimr=bml.N,bmr.N
-            use_bm=True
-        phi=sum(phis,axis=0).reshape([ndiml,ndimr])/sqrt(len(phis))  #construct wave function of equal distribution of all states.
-        phi[abs(phi)<ZERO_REF]=0
-        if use_bm:
-            phi=bml.blockize(phi,axes=(0,))
-            phi=bmr.blockize(phi,axes=(1,))
-
-        rhol=phi.dot(phi.T.conj())
-        rhor=phi.T.conj().dot(phi)
-
-        if bml is not None:
-            if not bml.check_blockdiag(rhol,tol=1e-5) or not bmr.check_blockdiag(rhor,tol=1e-5):
-                raise Exception('''Density matrix is not block diagonal, which is not expected,
-        1. make sure your are using additive good quantum numbers.
-        2. avoid ground state degeneracy.''')
-        spec,U=eigbh(rhol,bm=bml,return_vecs=True)
-        kpmask=spec>tol
-        spec,U=spec[kpmask],U.tocsc()[:,kpmask]
-        #using phi=USV to get V
-        V=U.T.conj().dot(phi)/sqrt(spec[:,newaxis])   #V is row-wise othorgonal
-        #spec2,V=eigbh(rhor,bm=bmr,return_vecs=True);V=V.T.conj()
-
-        #check phi
-        assert(allclose(V.dot(V.T.conj()),identity(V.shape[0])))
-        phi2=U.dot(sps.diags(sqrt(spec),0)).dot(V)
-        assert(sum(phi2*phi.conj())>0.9)
- 
-        return U,spec,V
+        return spec,U,kpmask,trunc_error
 
     def state_prediction(self,phi,l,direction):
         '''
@@ -543,38 +550,35 @@ class DMRGEngine(object):
                 phi=phi*(1-2*(n_tot%2))
         return phi
 
-    def get_mps(self,phi,hgen_l,hgen_r,labels=['s','a'],direction=None):
+    def get_mps(self,phi,l,labels=['s','a'],direction=None):
         '''
         Get the MPS from run-time phi, and evolution matrices.
 
         Parameters:
             :phi: ndarray, the eigen-function of current step.
-            :hgen_l/hgen_r: list, the hamiltonian generator for left/right block.
+            :l: int, the size of left block.
             :direction: '->'/'<-'/None, if None, the direction is provided by the truncation information.
 
         Return:
             <MPS>, the disired MPS, the canonicallity if decided by the current position.
         '''
         #get the direction
-        if direction is None:
-            direction='->' if hgen_l.truncated else '<-'
         assert(direction=='<-' or direction=='->')
 
+        nsite=self.hchain.nsite
         phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
-        NL,NR=hgen_l.N,hgen_r.N
-        nsite=NL+NR
+        NL,NR=l,nsite-l
+        hgen_l,hgen_r=self.query('l',NL),self.query('r',NR)
         if direction=='->':
             A=hgen_l.evolutor.A(NL-1,dense=True)   #get A[sNL](NL-1,NL)
-            A=tensor.Tensor(A,labels=['sl+1','al','al+1\'']).conj()
+            A=tensor.Tensor(A,labels=['sl+1','al','al+1\''])
             phi=tensor.contract([A,phi])
             phi=phi.chorder([0,2,1])   #now we get phi(al+1,sl+2,al+2)
             #decouple phi into S*B, B is column-wise othorgonal
             U,S,V=svd(phi.reshape([phi.shape[0],-1]),full_matrices=False)
             U=tensor.Tensor(U,labels=['al+1\'','al+1'])
-            A=A*U  #get A(al,sl+1,al+1)
+            A=(A*U)  #get A(al,sl+1,al+1)
             B=transpose(V.reshape([S.shape[0],phi.shape[1],phi.shape[2]]),axes=(1,2,0))   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, stored in column wise othorgonal format
-            AL=hgen_l.evolutor.get_AL(dense=True)[:-1]+[A]
-            BL=[B]+hgen_r.evolutor.get_AL(dense=True)[::-1]
         else:
             B=hgen_r.evolutor.A(NR-1,dense=True)   #get B[sNR](NL+1,NL+2)
             B=tensor.Tensor(B,labels=['sl+2','al+2','al+1\'']).conj()    #!the conjugate?
@@ -584,9 +588,18 @@ class DMRGEngine(object):
             V=tensor.Tensor(V,labels=['al+1','al+1\''])
             B=(V*B).chorder([1,2,0]).conj()   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, for B is in transposed order by default.
             A=transpose(U.reshape([phi.shape[0],phi.shape[1],S.shape[0]]),axes=(1,0,2))   #al,sl+1,al+1 -> sl+1,al,al+1, stored in column wise othorgonal format
-            AL=hgen_l.evolutor.get_AL(dense=True)+[A]
-            BL=[B]+hgen_r.evolutor.get_AL(dense=True)[::-1][1:]
-        AL=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]).conj() for ai in AL]
-        BL=[chorder(bi,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]) for bi in BL]   #transpose
+
+        #if hasattr(hgen_r,'zstring'):  #cope with the sign problem in the l=1 case, in the left <- right labeling order. 
+        #    n1=(1-Z4scfg(hgen_l.spaceconfig).diagonal())/2
+        #    A=A*(1-2*(n1[:,newaxis,newaxis]%2))
+        #    print A.shape
+        #    pdb.set_trace()
+
+        AL=hgen_l.evolutor.get_AL(dense=True)[:-1]+[A]
+        BL=[B]+hgen_r.evolutor.get_AL(dense=True)[::-1][1:]
+
+        AL=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]) for ai in AL]
+        BL=[chorder(bi,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for bi in BL]   #transpose
         mps=MPS(AL=AL,BL=BL,S=S,labels=labels)
         return mps
+

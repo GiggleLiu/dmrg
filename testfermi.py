@@ -18,6 +18,16 @@ from lanczos import get_H,get_H_bm
 from blockmatrix import get_bmgen
 from dmrg import *
 
+swap_axis=True
+if swap_axis:
+    SpaceConfig.SPACE_TOKENS=['nambu','atom','spin','orbit']
+
+def chorder(l):
+    '''change the order of config.'''
+    if swap_axis:
+        l[-3],l[-2]=l[-2],l[-3]
+    return l
+
 class ChainN(object):
     '''This is a tight-binding model for a chain.'''
     def __init__(self,t,t2=0,U=0,mu=0.,occ=True,nsite=6):
@@ -27,9 +37,9 @@ class ChainN(object):
 
         #occupation representation will use <SuperSpaceConfig>, otherwise <SpaceConfig>.
         if self.occ:
-            spaceconfig=SuperSpaceConfig([1,2,nsite,1])
+            spaceconfig=SuperSpaceConfig(chorder([1,2,nsite,1]))
         else:
-            spaceconfig=SpaceConfig([1,2,nsite,1],kspace=False)
+            spaceconfig=SpaceConfig(chorder([1,2,nsite,1]),kspace=False)
             if abs(U)>0: warnings.warn('U is ignored in non-occupation representation.')
         hgen=RHGenerator(spaceconfig=spaceconfig)
 
@@ -76,7 +86,7 @@ class TestFH(object):
         self.model_exact=ChainN(t=t,U=U,t2=t2,mu=mu,occ=False,nsite=nsite)
         self.model_occ=ChainN(t=t,U=U,t2=t2,mu=mu,occ=True,nsite=nsite)
         scfg=self.model_occ.hgen.spaceconfig
-        spaceconfig=SuperSpaceConfig([scfg.nspin,1,scfg.norbit])
+        spaceconfig=SuperSpaceConfig(chorder([scfg.nspin,1,scfg.norbit]))
         self.expander=FermionHGen(spaceconfig=spaceconfig,evolutor=NullEvolutor(hndim=spaceconfig.hndim))
         self.expander2=FermionHGen(spaceconfig=spaceconfig,evolutor=Evolutor(hndim=spaceconfig.hndim))
         self.expander3=FermionHGen(spaceconfig=spaceconfig,evolutor=MaskedEvolutor(hndim=spaceconfig.hndim))
@@ -85,12 +95,14 @@ class TestFH(object):
         '''
         The parameters are adapted from PRB 54. 7598
         '''
-        self.set_params(U=4.,t=1.,mu=0.,t2=0.,nsite=nsite)
+        self.set_params(U=2.,t=1.,mu=1.,t2=0.,nsite=nsite)
         H_serial=op2collection(op=self.model_occ.hgen.get_opH())
         bmgen=get_bmgen(self.expander3.spaceconfig,'QM')
         dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen,reflect=True)
-        EG2=dmrgegn.run_finite(endpoint=(4,'<-',0),maxN=[10,30,50,50,50],tol=0,block_params={'target_block':(0,0),'target_sector':{'C':1}})[-1]
-        print EG2*nsite
+        for c in [-1,1]:
+            EG2,EV2=dmrgegn.run_finite(endpoint=(4,'<-',0),maxN=[20,30,50,50,50],tol=0,block_params={'target_block':(0,0),'target_sector':{'C':-1}})
+            print 'Get gound state energy for C2 -> %s: %s.'%(c,EG2*nsite)
+        #the result is -36.1359 for C=-1, and -36.3408 for C=1
         pdb.set_trace()
 
     def test_nonint(self):
@@ -119,11 +131,13 @@ class TestFH(object):
         #the solution through dmrg.
         bmgen=get_bmgen(self.expander3.spaceconfig,'QM')
         dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen,reflect=True)
-        EG2,Vmin2=dmrgegn.run_finite(endpoint=(5,'->',2),maxN=[10,20,30,40,40],tol=0,block_params={'target_block':(0,0)})
-        Vmin3=dmrgegn.get_mps()
+        EG2,Vmin2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0,block_params={'target_block':(0,0)})
         #check for states.
         assert_almost_equal(Emin_exact,EG2*H_serial.nsite,decimal=4)
-        assert_almost_equal(abs(Vmin3.state),abs(Vmin2.state),decimal=3)
+        Vmin1=Vmin1[:,0]
+        assert_almost_equal(abs(Vmin2.state),abs(Vmin1),decimal=3)
+        print (Vmin2.state/Vmin1)[abs(Vmin1)>1e-2]
+        pdb.set_trace()
 
     def test_all(self):
         self.test_disc_symm(20)

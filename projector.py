@@ -53,7 +53,7 @@ class Projector(object):
             R=tensor.contract([R,bi,ai])
         res=tensor.contract([L,R])
 
-    def update(self.hgen_l,hgen_r):
+    def update(self,hgen_l,hgen_r):
         '''
         Update the projector,
         '''
