@@ -140,7 +140,7 @@ class TestFH(object):
         pdb.set_trace()
 
     def test_all(self):
-        self.test_disc_symm(20)
         self.test_nonint()
+        self.test_disc_symm(20)
 
 TestFH().test_all()

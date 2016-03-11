@@ -159,10 +159,10 @@ class DMRGEngine(object):
                     print 'setting %s-site of left and %s-site of right.'%(hgen_l.N,hgen_r.N)
                     self.set('l',hgen_l,hgen_l.N)
                     print 'set L = %s'%hgen_l.N
-                    if hgen_l.N is not hgen_r.N:
+                    if hgen_l.N is not hgen_r.N or (not self.reflect and n==0 and i<nsite/2):
                         #Note: Condition for setting up the right block,
-                        #1. when the left and right part are not equal length or
-                        #2. when the reflection is not used.
+                        #1. when the left and right part are not the same one.
+                        #2. when the block has not been expanded to full length and not reflecting.
                         self.set('r',hgen_r,hgen_r.N)
                         print 'set R = %s'%hgen_r.N
 
