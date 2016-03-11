@@ -100,9 +100,9 @@ class TestFH(object):
         bmgen=get_bmgen(self.expander3.spaceconfig,'QM')
         dmrgegn=DMRGEngine(hchain=H_serial,hgen=self.expander3,tol=0,bmg=bmgen,reflect=True)
         for c in [-1,1]:
-            EG2,EV2=dmrgegn.run_finite(endpoint=(4,'<-',0),maxN=[20,30,50,50,50],tol=0,block_params={'target_block':(0,0),'target_sector':{'C':-1}})
+            EG2,EV2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[20,40,50,70,70],tol=0,block_params={'target_block':(0,0),'target_sector':{'C':c}})
             print 'Get gound state energy for C2 -> %s: %s.'%(c,EG2*nsite)
-        #the result is -36.1359 for C=-1, and -36.3408 for C=1
+        #the result is -36.1372 for C=-1, and -36.3414 for C=1
         pdb.set_trace()
 
     def test_nonint(self):

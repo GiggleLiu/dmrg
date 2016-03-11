@@ -159,7 +159,7 @@ class DMRGEngine(object):
                     print 'setting %s-site of left and %s-site of right.'%(hgen_l.N,hgen_r.N)
                     self.set('l',hgen_l,hgen_l.N)
                     print 'set L = %s'%hgen_l.N
-                    if hgen_l.N!=hgen_r.N or (not self.reflect):
+                    if hgen_l.N is not hgen_r.N:
                         #Note: Condition for setting up the right block,
                         #1. when the left and right part are not equal length or
                         #2. when the reflection is not used.
@@ -171,6 +171,11 @@ class DMRGEngine(object):
                     phi=phil[0]
                     if nsite==nsite_true:
                         if self.reflect and nsite%2==0 and ((i==nsite/2-2 and direction=='->') or (i==nsite/2 and direction=='<-')):
+                            #Prediction can not be used:
+                            #when we are going to calculate the symmetry point
+                            #and use the reflection symmetry.
+                            #for the right block is instantly replaced by another hamiltonian generator,
+                            #which is not directly connected to the current hamiltonian generator.
                             initial_state=None
                         elif direction=='->' and i==nsite-2:  #for the case without reflection.
                             initial_state=phil[0].ravel()
@@ -178,7 +183,7 @@ class DMRGEngine(object):
                             initial_state=phil[0].ravel()
                         else:
                             if self.reflect and direction=='->' and i==nsite/2-1:
-                                direction='<-'
+                                direction='<-'  #the turning point of where reflection used.
                             initial_state=sum([self.state_prediction(phi,l=i+1,direction=direction) for phi in phil],axis=0)
                             initial_state=initial_state.ravel()
 
@@ -306,8 +311,11 @@ class DMRGEngine(object):
         else:
             bml=None #get_blockmarker(HL0)
             bmr=None #get_blockmarker(HR0)
+        t10=time.time()
+        print 'prepair intra ->',t10-t0
 
-        H=kron(HL0,sps.identity(ndimr))+kron(sps.identity(ndiml),HR0)
+        H1,H2=kron(HL0,sps.identity(ndimr)),kron(sps.identity(ndiml),HR0)
+        H=H1+H2
         #get the link hamiltonians
         sb=SuperBlock(hgen_l,hgen_r)
         Hin=[]
@@ -316,11 +324,10 @@ class DMRGEngine(object):
         H=H+sum(Hin)
 
         #get the starting eigen state v00!
-        t1=time.time()
         if initial_state is None:
             initial_state=random.random(H.shape[0])
         if not symm_handler.isnull:
-            if hgen_l.N!=hgen_r.N or (not self.reflect and not (hgen_l is hgen_r)):
+            if hgen_l.N is not hgen_r.N:
                 #Note, The cases to disable C2 symmetry,
                 #1. NL!=NR
                 #2. NL==NR, reflection is not used(and not the first iteration).
@@ -328,13 +335,14 @@ class DMRGEngine(object):
             else:
                 nl=bml.antiblockize(int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2)
                 symm_handler.update_handlers(n=nl,useC=True)
-            #v00=symm_handler.project_state(phi=initial_state)
             v00=initial_state
+            #v00=symm_handler.project_state(phi=initial_state)
             #H=symm_handler.project_op(op=H)
             if hgen_l is hgen_r:
                 assert(symm_handler.check_op(H))
         else:
             v00=initial_state
+        t12=time.time()
 
         #perform diagonalization
         ##1. detect specific block for diagonalization, get Hc and v0
@@ -349,15 +357,15 @@ class DMRGEngine(object):
             if hasattr(target_block,'__call__'):
                 target_block=target_block(nsite=hgen_l.N+hgen_r.N)
             bm_tot=self.bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
-            H_bd=bm_tot.blockize(H)
-
-            Hc=bm_tot.lextract_block(H_bd,(target_block,target_block))
-            v0=bm_tot.lextract_block(bm_tot.blockize(v00),(target_block,))
+            Hc=bm_tot.lextract_block_pre(H,(target_block,target_block))
+            v0=bm_tot.lextract_block_pre(bm_tot.blockize(v00),(target_block,))
 
         ##2. diagonalize to get desired number of levels
         detect_C2=symm_handler.target_sector.has_key('C')# and not symm_handler.useC
         k=max(nlevel,symm_handler.C_detect_scope if detect_C2 else 1)
         #M=None# if len(symm_handler.symms)==0 else symm_handler.get_projector()
+        t1=time.time()
+        print 'blockization ->',t1-t12
         if Hc.shape[0]<400:
             e,v=eigh(Hc.toarray())
             e,v=e[:k],v[:,:k]
@@ -368,6 +376,7 @@ class DMRGEngine(object):
                 e,v=eigsh(Hc,k=k+1,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0)
         order=argsort(e)
         e,v=e[order],v[:,order]
+        t2=time.time()
         ##3. permute back eigen-vectors into original representation al,sl+1,sl+2,al+2
         if bm_tot is not None:
             bindex=bm_tot.labels.index(target_block)
@@ -390,7 +399,6 @@ class DMRGEngine(object):
             ind=argmax(overlaps)
             e,vl,overlaps=array([e[ind]]),[vl[ind]],[overlaps[ind]]
         print 'The goodness of the estimate -> %s'%(overlaps[0])
-        t2=time.time()
 
         #Do-wavefunction analysis, preliminary truncation is performed(up to ZERO_REF).
         for v in vl:
@@ -399,11 +407,11 @@ class DMRGEngine(object):
         U1,specs,U2,(kpmask1,kpmask2),trunc_error=self.svd_analysis(phis=vl,bml=bml,bmr=bmr,maxN=maxN,target_block=target_block)
         print '%s states kept.'%sum(kpmask1)
         hgen_l.trunc(U=U1,block_marker=bml,kpmask=kpmask1)  #kpmask is also important for setting up the sign
-        if hgen_l is not hgen_r and not (hgen_l.N==hgen_r.N and self.reflect):
+        if hgen_l is not hgen_r:
             #spec2,U2,kpmask2,trunc_error=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='r',maxN=maxN)
             hgen_r.trunc(U=U2,block_marker=bmr,kpmask=kpmask2)
         t3=time.time()
-        print 'Elapse -> total:%s, eigen:%s'%(t3-t0,t2-t1)
+        print 'Elapse -> prepair:%s, eigen:%s, trunc: %s'%(t1-t0,t2-t1,t3-t2)
         phil=[phi.reshape([ndiml/hndim,hndim,ndimr/hndim,hndim]) for phi in vl]
         return e,trunc_error,phil
 
