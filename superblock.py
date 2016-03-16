@@ -44,17 +44,18 @@ def site_image(ops,NL,NR,care_sign=False):
         opss.append(opi)
     return type(ops)(opss)
 
-
 class SuperBlock(object):
     '''
     Super Block operation.
     
     Construct:
-        SuperBlock(hl,hr)
+        SuperBlock(hl,hr,order='A.B.')
 
     Attributes:
         :hl/hr: <RGHGen>, Hamiltonian Generator for left and right blocks.
         :order: 'A.B.'/'A..B', the space ordering.
+
+    Read Only Attributes:
         :nsite: integer, number of total sites(readonly).
         :hndim: integer, the dimension of a single site(readonly).
     '''

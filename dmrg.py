@@ -508,7 +508,6 @@ class DMRGEngine(object):
         spec_cut=sort(spec)[max(0,U.shape[0]-maxN)]
         kpmask[(spec>=spec_cut)&(spec>ZERO_REF)]=True
         trunc_error=sum(spec[~kpmask])
-        #spec,U=spec[kpmask],U.tocsc()[:,kpmask]
         print 'With %s(%s) blocks.'%(bm.nblock,bm.nblock)
         return spec,U,kpmask,trunc_error
 
