@@ -9,7 +9,7 @@ import pdb,time,copy
 
 from tba.hgen import SpinSpaceConfig
 from rglib.mps import MPO,OpUnitI,opunit_Sz,opunit_Sp,opunit_Sm,opunit_Sx,opunit_Sy,MPS
-from rglib.hexpand import SpinHGen
+from rglib.hexpand import RGHGen
 from rglib.hexpand import MaskedEvolutor,NullEvolutor,Evolutor
 from dmrg import DMRGEngine
 from lanczos import get_H,get_H_bm
@@ -129,11 +129,9 @@ class DMRGTest():
 
         #mps=MPS.load(filename)
         #run dmrg to get the initial guess.
-        hgen=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=MaskedEvolutor(hndim=2))
-        dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen,tol=0)
-        dmrgegn.run_finite(endpoint=(1,'<-',0),maxN=40,tol=1e-12)
-        #hgen=dmrgegn.query('r',nsite-1)
-        mps=dmrgegn.get_mps()  #right normalized initial state
+        hgen=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor=MaskedEvolutor(hndim=2))
+        dmrgegn=DMRGEngine(hgen=hgen,tol=0)
+        EG,mps=dmrgegn.run_finite(endpoint=(1,'<-',0),maxN=40,tol=1e-12)
         mps.save(filename)
 
         #run vmps
@@ -146,34 +144,33 @@ class DMRGTest():
         '''
         nsite=10
         model=self.get_model(nsite,1)
-        hgen1=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=NullEvolutor(hndim=2))
-        hgen2=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=MaskedEvolutor(hndim=2))
-        H=get_H(model.H_serial,hgen1)
+        hgen1=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor=NullEvolutor(hndim=2))
+        hgen2=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor=MaskedEvolutor(hndim=2))
+        H=get_H(hgen1)
         EG1=eigsh(H,k=1,which='SA')[0]
-        dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen2,tol=0)
-        EG2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0)[-1]*nsite
+        dmrgegn=DMRGEngine(hgen=hgen2,tol=0,reflect=True)
+        EG2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0)[0]*nsite
         assert_almost_equal(EG1,EG2,decimal=4)
-
 
     def test_dmrg_infinite(self):
         '''test for infinite dmrg.'''
         maxiter=100
         model=self.get_model(maxiter+2,1)
-        hgen=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=MaskedEvolutor(hndim=2))
-        dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen,tol=0)
+        hgen=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor=MaskedEvolutor(hndim=2))
+        dmrgegn=DMRGEngine(hgen=hgen,tol=0)
         EG=dmrgegn.run_infinite(maxiter=maxiter,maxN=20,tol=0)[-1]
         assert_almost_equal(EG,0.25-log(2),decimal=2)
 
     def test_lanczos(self):
         '''test for directly construct and solve the ground state energy.'''
         model=self.get_model(10,1)
-        hgen1=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=NullEvolutor(hndim=2))
-        hgen2=SpinHGen(spaceconfig=SpinSpaceConfig([2,1]),evolutor=Evolutor(hndim=2))
-        dmrgegn=DMRGEngine(hchain=model.H_serial,hgen=hgen1,tol=0)
-        H=get_H(H=model.H_serial,hgen=hgen1)
-        H2,bm2=get_H_bm(H=model.H_serial,hgen=hgen2,bstr='M')
+        hgen1=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor=NullEvolutor(hndim=2))
+        hgen2=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor=Evolutor(hndim=2))
+        dmrgegn=DMRGEngine(hgen=hgen1,tol=0)
+        H=get_H(hgen=hgen1)
+        H2,bm2=get_H_bm(hgen=hgen2,bstr='M')
         Emin=eigsh(H,k=1)[0]
-        Emin2=eigsh(bm2.lextract_block(H2,0.),k=1)[0]
+        Emin2=eigsh(bm2.lextract_block(H2,(0.,0,)),k=1)[0]
         print 'The Ground State Energy is %s, tolerence %s.'%(Emin,Emin-Emin2)
         assert_almost_equal(Emin,Emin2)
 

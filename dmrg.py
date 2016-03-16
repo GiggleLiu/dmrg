@@ -25,7 +25,6 @@ class DMRGEngine(object):
     DMRG Engine.
 
     Attributes:
-        :hchain: <OpCollection>, the chain hamiltonian.
         :hgen: <RGHGen>, hamiltonian Generator.
         :bmg: <BlockMarkerGenerator>, the block marker generator.
         :tol: float, the tolerence, when maxN and tol are both set, we keep the lower dimension.
@@ -33,8 +32,7 @@ class DMRGEngine(object):
         :LPART/RPART: dict, the left/right scanning of hamiltonian generators.
         :_tails(private): list, the last item of A matrices, which is used to construct the <MPS>.
     '''
-    def __init__(self,hchain,hgen,bmg=None,tol=0,reflect=False):
-        self.hchain=hchain
+    def __init__(self,hgen,bmg=None,tol=0,reflect=False):
         self.tol=tol
         self.hgen=hgen
         self.bmg=bmg
@@ -49,7 +47,7 @@ class DMRGEngine(object):
     @property
     def nsite(self):
         '''Number of sites'''
-        return self.hchain.nsite
+        return self.hgen.nsite
 
     def query(self,which,length):
         '''
@@ -63,11 +61,9 @@ class DMRGEngine(object):
         '''
         assert(which=='l' or which=='r')
         if which=='l' or self.reflect:
-            #return copy.deepcopy(self.LPART[length])
-            return self.LPART[length].make_copy()
+            return copy.copy(self.LPART[length])
         else:
-            #return copy.deepcopy(self.RPART[length])
-            return self.RPART[length].make_copy()
+            return copy.copy(self.RPART[length])
 
     def set(self,which,hgen,length=None):
         '''
@@ -90,9 +86,16 @@ class DMRGEngine(object):
 
     def reset(self):
         '''Restore this engine to initial status.'''
-        hgen=copy.deepcopy(self.hgen)
-        self.LPART={0:hgen}
-        self.RPART={0:hgen}
+        #we insert Zs into operator collections to cope with fermionic sign problem.
+        #and use site image to create a reversed ordering!
+        hgen_l=copy.deepcopy(self.hgen)
+        hgen_l.evolutees['H'].opc.insert_Zs(spaceconfig=hgen_l.spaceconfig)
+        self.LPART={0:hgen_l}
+        if not self.reflect:
+            hgen_r=copy.deepcopy(self.hgen)
+            hgen_r.evolutees['H'].opc=site_image(hgen_r.evolutees['H'].opc,NL=0,NR=hgen_r.nsite,care_sign=True)
+            hgen_r.evolutees['H'].opc.insert_Zs(spaceconfig=hgen_r.spaceconfig)
+            self.RPART={0:hgen_r}
 
     def run_finite(self,endpoint=None,tol=0,maxN=20,block_params={}):
         '''
@@ -122,7 +125,7 @@ class DMRGEngine(object):
         if 'C' in symm_handler.symms and not self.reflect:
             raise Exception('Using C2 symmetry without reflection symmetry is unreliable, forbiden for safety!')
 
-        nsite=self.hchain.nsite
+        nsite=self.hgen.nsite
         if endpoint is None: endpoint=(4,'<-',0)
         maxscan,end_direction,end_site=endpoint
         if ndim(maxN)==0:
@@ -149,22 +152,20 @@ class DMRGEngine(object):
                     else:
                         hgen_r=self.query('r',nsite-i-2)
                     print 'A'*hgen_l.N+'..'+'B'*hgen_r.N
-                    opi=set(self.hchain.query(i)+self.hchain.query(i+1))
-                    opi=filter(lambda op:all(array(op.siteindex)<=(hgen_l.N+hgen_r.N+1)),opi)
                     nsite_true=hgen_l.N+hgen_r.N+2
 
                     #run a step
-                    EG,err,phil=self.dmrg_step(hgen_l,hgen_r,opi,direction=direction,tol=tol,maxN=m,block_params=block_params,initial_state=initial_state,symm_handler=symm_handler)
+                    EG,err,phil=self.dmrg_step(hgen_l,hgen_r,direction=direction,tol=tol,maxN=m,block_params=block_params,initial_state=initial_state,symm_handler=symm_handler)
                     #update LPART and RPART
                     print 'setting %s-site of left and %s-site of right.'%(hgen_l.N,hgen_r.N)
                     self.set('l',hgen_l,hgen_l.N)
-                    print 'set L = %s'%hgen_l.N
-                    if hgen_l.N is not hgen_r.N or (not self.reflect and n==0 and i<nsite/2):
+                    print 'set L = %s, size %s'%(hgen_l.N,hgen_l.ndim)
+                    if hgen_l is not hgen_r or (not self.reflect and n==0 and i<nsite/2):
                         #Note: Condition for setting up the right block,
                         #1. when the left and right part are not the same one.
                         #2. when the block has not been expanded to full length and not reflecting.
                         self.set('r',hgen_r,hgen_r.N)
-                        print 'set R = %s'%hgen_r.N
+                        print 'set R = %s, size %s'%(hgen_r.N,hgen_r.ndim)
 
                     #do state prediction
                     initial_state=None   #restore initial state.
@@ -230,14 +231,12 @@ class DMRGEngine(object):
         hgen=copy.deepcopy(self.hgen)
         if isinstance(hgen.evolutor,NullEvolutor):
             raise ValueError('The evolutor must not be null!')
-        if maxiter>self.hchain.nsite:
+        if maxiter>self.hgen.nsite:
             warnings.warn('Max iteration exceeded the chain length!')
         for i in xrange(maxiter):
             print 'Running iteration %s'%i
             t0=time.time()
-            opi=unique(self.hchain.query(i)+self.hchain.query(i+1))
-            opi=filter(lambda op:all(array(op.siteindex)<=(2*hgen.N+1)),opi)
-            EG,err,phil=self.dmrg_step(hgen,hgen,opi,tol=tol,block_params=block_params,symm_handler=symm_handler)
+            EG,err,phil=self.dmrg_step(hgen,hgen,tol=tol,block_params=block_params,symm_handler=symm_handler)
             EG=EG/(2.*(i+1))
             if len(EL)>0:
                 diff=EG-EL[-1]
@@ -251,13 +250,12 @@ class DMRGEngine(object):
                 break
         return EL
 
-    def dmrg_step(self,hgen_l,hgen_r,ops,direction='->',tol=0,maxN=20,block_params={},initial_state=None,symm_handler=None):
+    def dmrg_step(self,hgen_l,hgen_r,direction='->',tol=0,maxN=20,block_params={},initial_state=None,symm_handler=None):
         '''
         Run a single step of DMRG iteration.
 
         Parameters:
             :hgen_l,hgen_r: <RGHGen>, the hamiltonian generator for left and right blocks.
-            :ops: list of <OpString>/<OpUnit>, the relevant operators to update.
             :direction: str,
 
                 * '->', right scan.
@@ -278,37 +276,29 @@ class DMRGEngine(object):
         ndiml0,ndimr0=hgen_l.ndim,hgen_r.ndim
         ndiml,ndimr=ndiml0*hndim,ndimr0*hndim
         #filter operators to extract left-only and right-only blocks.
-        for op in ops:
-            siteindices=array(op.siteindex).reshape([1,-1])
-            if any(siteindices>NL+NR+1) or any(siteindices<0):
-                print 'Drop opstring %s'%op
-            elif all(siteindices>NL):
-                opstr=site_image(op,NL+1,NR+1)
-                intraop_r.append(opstr)
-            elif all(siteindices<=NL):
-                intraop_l.append(op)
-            else:
-                interop.append(op)
-        HL0=hgen_l.expand(intraop_l)
+        interop=filter(lambda op:isinstance(op,OpString) and (NL+1 in op.siteindex),hgen_l.hchain.query(NL))  #site NL and NL+1
+        HL0=hgen_l.expand1()['H']
         #expansion can not do twice to the same hamiltonian generator!
         if hgen_r is hgen_l:
             HR0=HL0
         else:
-            HR0=hgen_r.expand(intraop_r)
+            HR0=hgen_r.expand1()['H']
 
         #blockize HL0 and HR0
         nlevel=block_params.get('nlevel',1)
+        NL,NR=hgen_l.N,hgen_r.N
         if self.bmg is not None:
             target_block=block_params.get('target_block')
-            n=max(hgen_l.N,hgen_r.N)
+            n=max(NL,NR)
             if isinstance(hgen_l.evolutor,MaskedEvolutor) and n>1:
-                kpmask_l=hgen_l.evolutor.kpmask(hgen_l.N-2)     #kpmask is also related to block marker!!!
-                kpmask_r=hgen_r.evolutor.kpmask(hgen_r.N-2)
+                kpmask_l=hgen_l.evolutor.kpmask(NL-2)     #kpmask is also related to block marker!!!
+                kpmask_r=hgen_r.evolutor.kpmask(NR-2)
             else:
                 kpmask_l=kpmask_r=None
-            bml=self.bmg.update_blockmarker(hgen_l.block_marker,kpmask=kpmask_l,nsite=hgen_l.N)
-            bmr=self.bmg.update_blockmarker(hgen_r.block_marker,kpmask=kpmask_r,nsite=hgen_r.N)
+            bml=self.bmg.update_blockmarker(hgen_l.block_marker,kpmask=kpmask_l,nsite=NL)
+            bmr=self.bmg.update_blockmarker(hgen_r.block_marker,kpmask=kpmask_r,nsite=NR)
         else:
+            target_block=None
             bml=None #get_blockmarker(HL0)
             bmr=None #get_blockmarker(HR0)
         t10=time.time()
@@ -392,7 +382,6 @@ class DMRGEngine(object):
         overlaps=array([abs(v00.dot(vi.conj()))/norm(v00)/norm(vi) for vi in vl])
         if detect_C2 and symm_handler.useC:  #use symmetry projection to detect C2
             indices=symm_handler.locate(vl)
-            print e
             print 'We find %s states meeting requirements, will take 1.'%len(indices)
             e,vl=array([e[indices[0]]]),[vl[indices[0]]]
         elif detect_C2:  #use state prediction to detect C2
@@ -404,7 +393,8 @@ class DMRGEngine(object):
         for v in vl:
             v[abs(v)<ZERO_REF]=0
         #spec1,U1,kpmask1,trunc_error=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='l',maxN=maxN)
-        U1,specs,U2,(kpmask1,kpmask2),trunc_error=self.svd_analysis(phis=vl,bml=bml,bmr=bmr,maxN=maxN,target_block=target_block)
+        U1,specs,U2,(kpmask1,kpmask2),trunc_error=self.svd_analysis(phis=vl,bml=HL0.shape[0] if bml is None else bml,\
+                bmr=HR0.shape[0] if bmr is None else bmr,maxN=maxN,target_block=target_block)
         print '%s states kept.'%sum(kpmask1)
         hgen_l.trunc(U=U1,block_marker=bml,kpmask=kpmask1)  #kpmask is also important for setting up the sign
         if hgen_l is not hgen_r:
@@ -439,17 +429,26 @@ class DMRGEngine(object):
         if use_bm:
             phi=bml.blockize(phi,axes=(0,))
             phi=bmr.blockize(phi,axes=(1,))
-        def mapping_rule(bli):
-            res=self.bmg.labels_sub([target_block],[bli])[0]
-            try:
-                return res.item()
-            except:
-                return tuple(res)
-        U,S,V,S2=svdb(phi,bm=bml,bm2=bmr,mapping_rule=mapping_rule,full_matrices=True);U2=V.T.conj()
+            def mapping_rule(bli):
+                res=self.bmg.labels_sub([target_block],[bli])[0]
+                try:
+                    return res.item()
+                except:
+                    return tuple(res)
+            U,S,V,S2=svdb(phi,bm=bml,bm2=bmr,mapping_rule=mapping_rule,full_matrices=True);U2=V.T.conj()
+        else:
+            U,S,V=svd(phi,full_matrices=True);U2=V.T.conj()
+            if ndimr>=ndiml:
+                S2=append(S,zeros(ndimr-ndiml))
+            else:
+                S2=append(S,zeros(ndiml-ndimr))
+                S,S2=S2,S
+            S,S2=sps.diags(S,0),sps.diags(S2,0)
+
         spec_l=S.dot(S.T.conj()).diagonal().real
         spec_r=S2.T.conj().dot(S2).diagonal().real
 
-        if bml is not None:
+        if use_bm:
             if not (bml.check_blockdiag(U.dot(sps.diags(spec_l,0)).dot(U.T.conj())) and\
                     bmr.check_blockdiag((V.T.conj().dot(sps.diags(spec_r,0))).dot(V))):
                 raise Exception('''Density matrix is not block diagonal, which is not expected,
@@ -529,7 +528,7 @@ class DMRGEngine(object):
         '''
         assert(direction=='<-' or direction=='->')
         phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
-        nsite=self.hchain.nsite
+        nsite=self.hgen.nsite
         NL,NR=l,nsite-l
         hgen_l,hgen_r=self.query('l',NL),self.query('r',NR)
         lr=NR-2 if direction=='->' else NR-1
@@ -541,9 +540,9 @@ class DMRGEngine(object):
             B=tensor.Tensor(B,labels=['sl+3','al+3','al+2']).conj()    #!the conjugate?
             phi=tensor.contract([A,phi,B])
             phi=phi.chorder([0,1,3,2])
-            if hasattr(hgen_r,'zstring'):  #cope with the sign problem
+            if hgen_r.use_zstring:  #cope with the sign problem
                 n1=(1-Z4scfg(hgen_l.spaceconfig).diagonal())/2
-                nr=(1-hgen_r.zstring[lr].diagonal())/2
+                nr=(1-hgen_r.zstring(lr).diagonal())/2
                 n_tot=n1[:,newaxis,newaxis]*(nr[:,newaxis]+n1)
                 phi=phi*(1-2*(n_tot%2))
         else:
@@ -551,9 +550,9 @@ class DMRGEngine(object):
             B=tensor.Tensor(B,labels=['sl+2','al+2','al+1']).conj()    #!the conjugate?
             phi=tensor.contract([A,phi,B])
             phi=phi.chorder([1,0,3,2])
-            if hasattr(hgen_r,'zstring'):  #cope with the sign problem
+            if hgen_r.use_zstring:  #cope with the sign problem
                 n1=(1-Z4scfg(hgen_l.spaceconfig).diagonal())/2
-                nr=(1-hgen_r.zstring[lr+1].diagonal())/2
+                nr=(1-hgen_r.zstring(lr+1).diagonal())/2
                 n_tot=n1*(nr[:,newaxis])
                 phi=phi*(1-2*(n_tot%2))
         return phi
@@ -573,7 +572,7 @@ class DMRGEngine(object):
         #get the direction
         assert(direction=='<-' or direction=='->')
 
-        nsite=self.hchain.nsite
+        nsite=self.hgen.nsite
         phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
         NL,NR=l,nsite-l
         hgen_l,hgen_r=self.query('l',NL),self.query('r',NR)

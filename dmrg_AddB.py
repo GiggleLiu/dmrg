@@ -63,10 +63,10 @@ class DMRGEngine(object):
         assert(which=='l' or which=='r')
         if which=='l' or self.reflect:
             #return copy.deepcopy(self.LPART[length])
-            return self.LPART[length].make_copy()
+            return copy.copy(self.LPART[length])
         else:
             #return copy.deepcopy(self.RPART[length])
-            return self.RPART[length].make_copy()
+            return copy.copy(self.RPART[length])
 
     def set(self,which,hgen,length=None):
         '''
@@ -127,9 +127,9 @@ class DMRGEngine(object):
                     #setup generators and operators.
                     hgen_l=self.query('l',i)
                     if n==0 and direction=='->' and i<(nsite+1)/2:
-                        hgen_r=hgen_l.make_copy()
+                        hgen_r=copy.copy(hgen_l)
                     else:
-                        hgen_r=self.query('r',nsite-i-2).make_copy()
+                        hgen_r=copy.copy(query('r',nsite-i-2))
                     print 'A'*hgen_l.N+'..'+'B'*hgen_r.N
                     print hgen_l.ndim,hgen_r.ndim
                     opi=set(self.hchain.query(i)+self.hchain.query(i+1))
@@ -207,7 +207,7 @@ class DMRGEngine(object):
             t0=time.time()
             opi=unique(self.hchain.query(i)+self.hchain.query(i+1))
             opi=filter(lambda op:all(array(op.siteindex)<=(2*hgen.N+1)),opi)
-            EG,U,kpmask,err,phil=self.dmrg_step(hgen,hgen.make_copy(),opi,tol=tol,block_params=block_params)
+            EG,U,kpmask,err,phil=self.dmrg_step(hgen,copy.copy(hgen),opi,tol=tol,block_params=block_params)
             EG=EG/(2.*(i+1))
             if len(EL)>0:
                 diff=EG-EL[-1]

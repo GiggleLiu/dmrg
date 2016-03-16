@@ -7,27 +7,26 @@ import scipy.sparse as sps
 import copy,time,pdb,warnings
 
 from rglib.hexpand import Z4scfg,kron
-from rglib.mps import OpString,OpUnit
+from rglib.mps import OpString,OpUnit,OpCollection
 
 __all__=['site_image','SuperBlock']
 
-def site_image(ops,NL,NR):
+def site_image(ops,NL,NR,care_sign=False):
     '''
     Perform imaging transformation for operator sites.
     
     Parameters:
-        :ops: list of <OpString>/<OpUnit>, the operator(s) for operation.
+        :ops: list of <OpString>/<OpUnit> or <OpCollection>, the operator(s) for operation.
         :NL/NR: integer, the number of sites in left/right block.
+        :care_sign: bool, take care of fermionic sign if True,\
+            if operators are inserted with Zs, they have already taken a specific ordering, so False.
 
     Return:
         list of <OpString>/<OpUnit>, the operators after imaginary operation.
     '''
     opss=[]
-    if not isinstance(ops,(list,tuple,ndarray)):
+    if isinstance(ops,(OpString,OpUnit)):
         ops=[ops]
-        is_list=False
-    else:
-        is_list=True
 
     for opi in ops:
         oprl=[]
@@ -41,9 +40,9 @@ def site_image(ops,NL,NR):
             oprl.append(ou)
         opi=prod(oprl)
         if isinstance(opi,OpString):
-            opi.compactify()
+            opi.compactify(care_sign=care_sign)
         opss.append(opi)
-    return opss if is_list else opss[0]
+    return type(ops)(opss)
 
 
 class SuperBlock(object):
@@ -68,7 +67,7 @@ class SuperBlock(object):
     @property
     def nsite(self):
         '''Total number of sites'''
-        return self.hl.N+self.hr.N+(2 if self.hl.truncated else 0)
+        return self.hl.N+self.hr.N
 
     @property
     def hndim(self):
@@ -85,7 +84,7 @@ class SuperBlock(object):
         Return:
             list of <OpString>/<OpUnit>, the operators after imaginary operation.
         '''
-        NL,NR=self.hl.N+(1 if self.hl.truncated else 0),self.hr.N+(1 if self.hr.truncated else 0)
+        NL,NR=self.hl.N,self.hr.N
         return site_image(ops,NL,NR)
 
     def get_op_onlink(self,ouA,ouB):
@@ -98,28 +97,26 @@ class SuperBlock(object):
         Return:
             matrix, the hamiltonian term.
         '''
-        NL,NR=self.hl.N+(1 if self.hl.truncated else 0),self.hr.N+(1 if self.hr.truncated else 0)
+        NL,NR=self.hl.N,self.hr.N
         scfg=self.hl.spaceconfig
         ndiml0=self.hl.evolutor.check_link(NL-1)
         ndimr0=self.hr.evolutor.check_link(NR-1)
-        #assert(ouA.siteindex==NL-1 and ouB.siteindex==NR-1)
+
         if ouA.fermionic:
-            sgn=Z4scfg(scfg)
             if self.order=='A.B.':
-                sgnr=self.hr.zstring.get(NR-1)
-                assert(sgnr is not None)
-                mA=kron(sps.identity(ndiml0),sps.csr_matrix(ouA.get_data()).dot(sgn))
-                mB=kron(sgnr,sps.csr_matrix(ouB.get_data()))
+                sgnr=self.hr.zstring(NR-1)
+                mA=kron(sps.identity(ndiml0),ouA.get_data(dense=False))
+                mB=kron(sgnr,ouB.get_data(dense=False))
             else:
-                mA=kron(sps.identity(ndiml0),sps.csr_matrix(ouA.get_data()).dot(sgn))
-                mB=kron(sps.csr_matrix(ouB.get_data()),sps.identity(ndimr0))
+                mA=kron(sps.identity(ndiml0),ouA.get_data(dense=False))
+                mB=kron(ouB.get_data(dense=False),sps.identity(ndimr0))
         else:
             if self.order=='A.B.':
-                mA=kron(sps.identity(ndiml0),sps.csr_matrix(ouA.get_data()))
-                mB=kron(sps.identity(ndimr0),sps.csr_matrix(ouB.get_data()))
+                mA=kron(sps.identity(ndiml0),ouA.get_data(dense=False))
+                mB=kron(sps.identity(ndimr0),ouB.get_data(dense=False))
             else:
-                mA=kron(sps.identity(ndiml0),sps.csr_matrix(ouA.get_data()))
-                mB=kron(sps.csr_matrix(ouB.get_data()),sps.identity(ndimr0))
+                mA=kron(sps.identity(ndiml0),ouA.get_data(dense=False))
+                mB=kron(ouB.get_data(dense=False),sps.identity(ndimr0))
         op=kron(mA,mB)
         return op
 
@@ -145,7 +142,7 @@ class SuperBlock(object):
         hndim=self.hndim
         siteindices=list(opstring.siteindex)
         nsite=self.nsite
-        NL,NR=self.hl.N+(1 if self.hl.truncated else 0),self.hr.N+(1 if self.hr.truncated else 0)
+        NL,NR=self.hl.N,self.hr.N
         if any(array(siteindices)>=self.nsite):
             raise ValueError('Site index out of range.')
         if not (len(siteindices)==len(unique(siteindices)) and all(diff(siteindices)>=0)):
@@ -161,7 +158,7 @@ class SuperBlock(object):
         if nll+nls==0 or nrs+nrr==0:
             raise NotImplementedError('Only inter-block terms are allowed,\
                     this is not implemented by perpose to avoid missing hamiltonian terms in DMRG iteration.')
-        elif  hasattr(self.hr,'zstring'):
+        elif self.hr.use_zstring:
             #handle the fermionic link.
             if nll!=0 or nrr!=0:
                 raise NotImplementedError('Only nearest neighbor term is allowed for fermionic links!')
@@ -182,11 +179,7 @@ class SuperBlock(object):
             #get the data in op1-block
             if len(op1)>0:
                 ou=op1[0]
-                if ou.fermionic:
-                    sgnr=hgen.zstring.get(NN-1).diagonal()
-                    data_1=sps.kron(sgnr,ou.get_data())
-                else:
-                    data_1=sps.kron(identity(ndim0),ou.get_data())
+                data_1=sps.kron(identity(ndim0),ou.get_data())
             else:
                 data_1=None
 
@@ -214,7 +207,7 @@ class SuperBlock(object):
         raise Exception('Not Tested!')
         siteindices=list(opstring.siteindex)
         nsite=self.nsite
-        NL,NR=self.hl.N+1,self.hr.N+1
+        NL,NR=self.hl.N,self.hr.N
         if any(array(siteindices)>=self.nsite):
             raise ValueError('Site index out of range.')
         if not (len(siteindices)==len(unique(siteindices)) and all(diff(siteindices)>=0)):
@@ -227,7 +220,7 @@ class SuperBlock(object):
         op_rr=filter(lambda ou:ou.siteindex>NL,opstring.opunits)
         nll,nls,nrl,nrr=len(op_ll),len(op_ls),len(op_rs),len(op_rr)
         #handle the fermionic link.
-        if nll+nls>0 and nrs+nrr>0 and hasattr(self.hr,'zstring'):
+        if nll+nls>0 and nrs+nrr>0 and self.hr.use_zstring:
             if nll!=0 or nrr!=0:
                 raise NotImplementedError('Only nearest neighbor term is allowed for fermionic links!')
             return self.get_op_onlink(op_ls[0],op_rs[0])
@@ -246,8 +239,8 @@ class SuperBlock(object):
                 opl=sps.identity(self.hr.ndim*hndim)
             if len(ou_cur)!=0:
                 ou=ou_cur[0]
-                if hasattr(self.hr,'zstring') and ou.fermionic:
-                    I0=self.hr.zstring[NL-1]
+                if self.hr.use_zstring and ou.fermionic:
+                    I0=self.hr.zstring(NL-1)
                 else:
                     I0=identity(self.hr.ndim)
                 ou0=ou.get_data()
@@ -266,7 +259,7 @@ class SuperBlock(object):
             if len(opunits)==0 and ou0.fermionic:
                 raise NotImplementedError('This operator is overall fermionic, which is not implemented!')
             if opunits[-1].siteindex!=NR-1:
-                if hasattr(self.hr,'zstring'):  #fermioic generator
+                if self.hr.use_zstring:  #fermioic generator
                     opr0,fermi0=self.hr.get_op(opstr,target_len=NR-1,get_fermionic_sign=True)
                     if fermi0:
                         raise NotImplementedError('This operator is overall fermionic, which is not implemented!')
@@ -277,7 +270,7 @@ class SuperBlock(object):
                 ou0=opunits.pop(-1)
                 if len(opunits)==0:
                     opr0,fermi0=identity(self.hr.evolutor.check_link(NR-1)),False
-                elif hasattr(self.hr,'zstring'):  #fermioic generator
+                elif self.hr.use_zstring:  #fermioic generator
                     opr0,fermi0=self.hr.get_op(OpString(opunits),target_len=NR-1,get_fermionic_sign=True)
                 else:
                     opr0,fermi0=self.hr.get_op(OpString(opunits),target_len=NR-1),False
