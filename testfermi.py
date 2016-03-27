@@ -82,7 +82,7 @@ class TestFH(object):
     def set_params(self,U=0.,t=1.,mu=0.1,t2=0.,nsite=6):
         '''Set the parameters.'''
         self.t,self.U,self.t2,self.mu=t,U,t2,mu
-        self.model_exact=ChainN(t=t,U=U,t2=t2,mu=mu,occ=False,nsite=nsite)
+        self.model_exact=ChainN(t=t,U=0,t2=t2,mu=mu,occ=False,nsite=nsite)
         self.model_occ=ChainN(t=t,U=U,t2=t2,mu=mu,occ=True,nsite=nsite)
         scfg=self.model_occ.hgen.spaceconfig
         self.spaceconfig1=SuperSpaceConfig(chorder([scfg.nspin,1,scfg.norbit]))
@@ -98,7 +98,7 @@ class TestFH(object):
         dmrgegn=DMRGEngine(hgen=expander3,tol=0,reflect=True)
         dmrgegn.use_U1_symmetry('QM')
         for c in [-1,1]:
-            dmrgegn.use_disc_symmetry(target_sector={'C':c,'P':-1},detect_scope=4)
+            dmrgegn.use_disc_symmetry(target_sector={'C':c},detect_scope=4)
             EG2,EV2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[20,40,50,70,70],tol=0,target_block=(0,0))
             print 'Get gound state energy for C2 -> %s: %s.'%(c,EG2*nsite)
         #the result is -36.1372 for C=-1, and -36.3414 for C=1
@@ -138,7 +138,7 @@ class TestFH(object):
         dmrgegn.use_U1_symmetry('QM')
         EG2,Vmin2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0,target_block=(0,0))
         #check for states.
-        assert_almost_equal(Emin_exact,EG2*H_serial.nsite,decimal=4)
+        assert_almost_equal(Emin_exact,EG2,decimal=4)
         Vmin1=Vmin1[:,0]
         assert_almost_equal(abs(Vmin2.state),abs(Vmin1),decimal=3)
         print (Vmin2.state/Vmin1)[abs(Vmin1)>1e-2]
@@ -152,8 +152,8 @@ class TestFH(object):
         print H2
 
     def test_all(self):
-        self.test_disc_symm(20)
         self.test_nonint()
+        self.test_disc_symm(20)
         self.test_site_image()
 
 

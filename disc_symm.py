@@ -239,10 +239,13 @@ class SymmetryHandler(object):
             res.remove('C')
         return res
 
-    @property
-    def isnull(self):
-        '''is null or not.'''
-        return len(self.target_sector)==0
+    def __eq__(self,target):
+        if target==None:
+            return len(self.target_sector)==0
+        elif isinstance(target,self.__class__):
+            return self.target_sector==target.target_sector and self.handlers==target.handlers
+        else:
+            raise TypeError('Can not compare %s and %s'%(self.__class__,target.__class__))
 
     def project_state(self,phi):
         '''
@@ -271,7 +274,7 @@ class SymmetryHandler(object):
             matrix, the projection matrix.
         '''
         target_sector=self.target_sector
-        if len(target_sector)==0:
+        if len(target_sector)==0 or len(self.symms)==0:
             return None
         pl=[]
         for symm in self.symms:
