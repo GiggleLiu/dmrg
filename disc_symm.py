@@ -261,7 +261,7 @@ class SymmetryHandler(object):
             matrix, the projection matrix.
         '''
         target_sector=self.target_sector
-        if len(target_sector)==0:
+        if len(target_sector)==0 or len(self.symms)==0:
             return None
         pl=[]
         for symm in self.symms:

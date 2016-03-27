@@ -83,7 +83,7 @@ class TestFH(object):
     def set_params(self,U=0.,t=1.,mu=0.1,t2=0.,nsite=6):
         '''Set the parameters.'''
         self.t,self.U,self.t2,self.mu=t,U,t2,mu
-        self.model_exact=ChainN(t=t,U=U,t2=t2,mu=mu,occ=False,nsite=nsite)
+        self.model_exact=ChainN(t=t,U=0,t2=t2,mu=mu,occ=False,nsite=nsite)
         self.model_occ=ChainN(t=t,U=U,t2=t2,mu=mu,occ=True,nsite=nsite)
         scfg=self.model_occ.hgen.spaceconfig
         self.spaceconfig1=SuperSpaceConfig(chorder([scfg.nspin,1,scfg.norbit]))
@@ -97,10 +97,12 @@ class TestFH(object):
         H_serial=op2collection(op=self.model_occ.hgen.get_opH())
         expander3=RGHGen(spaceconfig=spaceconfig,H=H_serial,evolutor_type='masked',use_zstring=True)
         bmgen=get_bmgen(spaceconfig,'QM')
-        dmrgegn=DMRGEngine(hgen=expander3,tol=0,bmg=bmgen,reflect=True)
+        dmrgegn=DMRGEngine(hgen=expander3,tol=0,bmg=bmgen,reflect=True,eigen_solver='JD')
         for c in [-1,1]:
-            EG2,EV2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[20,40,50,70,70],tol=0,block_params={'target_block':(0,0),'target_sector':{'C':c}})
-            print 'Get gound state energy for C2 -> %s: %s.'%(c,EG2*nsite)
+            EG2,EV2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[20,40,50,70,70],
+                    tol=0,block_params={'target_block':(0,0),'target_sector':{'C':c}})
+            print 'Get gound state energy for C2 -> %s: %s.'%(c,EG2)
+            pdb.set_trace()
         #the result is -36.1372 for C=-1, and -36.3414 for C=1
         pdb.set_trace()
 
@@ -138,7 +140,7 @@ class TestFH(object):
         dmrgegn=DMRGEngine(hgen=expander3,tol=0,bmg=bmgen,reflect=True)
         EG2,Vmin2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0,block_params={'target_block':(0,0)})
         #check for states.
-        assert_almost_equal(Emin_exact,EG2*H_serial.nsite,decimal=4)
+        assert_almost_equal(Emin_exact,EG2,decimal=4)
         Vmin1=Vmin1[:,0]
         assert_almost_equal(abs(Vmin2.state),abs(Vmin1),decimal=3)
         print (Vmin2.state/Vmin1)[abs(Vmin1)>1e-2]
@@ -152,9 +154,9 @@ class TestFH(object):
         print H2
 
     def test_all(self):
+        self.test_disc_symm(20)
         self.test_nonint()
         self.test_site_image()
-        self.test_disc_symm(20)
 
 
 TestFH().test_all()

@@ -4,17 +4,19 @@ DMRG Engine.
 
 from numpy import *
 from scipy.sparse.linalg import eigsh
-from scipy.linalg import eigh,norm,svd
+from scipy.linalg import eigh,svd,eigvalsh
+from numpy.linalg import norm
 from matplotlib.pyplot import *
 import scipy.sparse as sps
 import copy,time,pdb,warnings,numbers
 
 from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker,svdb
-from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString,tensor
+from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString,tensor,is_commute
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
 from rglib.hexpand import signlib
 from disc_symm import SymmetryHandler
 from superblock import SuperBlock,site_image
+from pydavidson import JDh
 
 ZERO_REF=1e-10
 
@@ -29,20 +31,89 @@ class DMRGEngine(object):
         :bmg: <BlockMarkerGenerator>, the block marker generator.
         :tol: float, the tolerence, when maxN and tol are both set, we keep the lower dimension.
         :reflect: bool, True if left<->right reflect, can be used to shortcut the run time.
+        :eigen_solver: str,
+            
+            * 'JD', Jacobi-Davidson iteration.
+            * 'LC', Lanczos, algorithm.
         :LPART/RPART: dict, the left/right scanning of hamiltonian generators.
         :_tails(private): list, the last item of A matrices, which is used to construct the <MPS>.
     '''
-    def __init__(self,hgen,bmg=None,tol=0,reflect=False):
+    def __init__(self,hgen,bmg=None,tol=0,reflect=False,eigen_solver='JD'):
         self.tol=tol
         self.hgen=hgen
         self.bmg=bmg
         self.reflect=reflect
+        self.eigen_solver=eigen_solver
 
         #claim attributes with dummy values.
         self._tails=None
         self.LPART=None
         self.RPART=None
         self.reset()
+
+    def _eigsh(self,H,v0,projector=None,tol=1e-12,sigma=None,check_commute=True,lc_search_space=1,k=1):
+        '''
+        solve eigenvalue problem.
+        '''
+        maxiter=5000
+        N=H.shape[0]
+        if projector is not None and check_commute:
+            assert(is_commute(H,projector))
+        if self.eigen_solver=='LC':
+            k=max(lc_search_space,k)
+            if H.shape[0]<100:
+                e,v=eigh(H.toarray())
+                e,v=e[:k],v[:,:k]
+            else:
+                try:
+                    e,v=eigsh(H,k=k,which='SA',maxiter=maxiter,tol=tol,v0=v0)
+                except:
+                    e,v=eigsh(H,k=k+1,which='SA',maxiter=maxiter,tol=tol,v0=v0)
+            order=argsort(e)
+            e,v=e[order],v[:,order]
+        else:
+            iprint=0
+            if projector is not None:
+                e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,maxiter=maxiter,sigma=sigma,which='SA',iprint=iprint)
+            else:
+                if sigma is None:
+                    e,v=JDh(H,v0=v0,k=max(lc_search_space,k),projector=projector,tol=tol,maxiter=maxiter,which='SA',iprint=iprint)
+                else:
+                    e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,maxiter=maxiter,sigma=sigma,which='SL',\
+                            iprint=iprint,converge_bound=1e-10)
+
+        nstate=len(e)
+        if nstate==0:
+            raise Exception('No Converged Pair!!')
+        elif nstate==1:
+            return e,v
+
+        #filter out states meeting projector.
+        if projector is not None and lc_search_space!=1:
+            overlaps=array([abs(projector.dot(v[:,i]).conj().dot(v[:,i])) for i in xrange(nstate)])
+            mask0=overlaps>0.1
+            if not any(mask0):
+                raise Exception('Can not find any states meeting specific parity!')
+            mask=overlaps>0.9
+            if sum(mask)==0:
+                #check for degeneracy.
+                istate=where(mask0)[0][0]
+                warnings.warn('Wrong result or degeneracy accur!')
+            else:
+                istate=where(mask)[0][0]
+            v=projector.dot(v[:,istate:istate+1])
+            v=v/norm(v)
+            return e[istate:istate+1],v
+        elif lc_search_space!=1:
+            #get the state with maximum overlap.
+            v0H=v0.conj()/norm(v0)
+            overlaps=array([abs(v0H.dot(v[:,i])) for i in xrange(nstate)])
+            istate=argmax(overlaps)
+            if overlaps[0]<0.7:
+                warnings.warn('Do not find any states same correspond to the one from last iteration!')
+            print 'The goodness of estimate -> %s'%overlaps[istate]
+        e,v=e[istate:istate+1],v[:,istate:istate+1]
+        return e,v
 
     @property
     def nsite(self):
@@ -147,7 +218,7 @@ class DMRGEngine(object):
                     #1. the first half of first scan.
                     #2. the reflection is used and left block is same length with right block.
                     hgen_l=self.query('l',i)
-                    if (n==0 and direction=='->' and i<(nsite+1)/2) or (self.reflect and i==(nsite/2) and nsite%2==0):
+                    if (n==0 and direction=='->' and i<(nsite+1)/2) or (self.reflect and i==(nsite/2-1) and nsite%2==0):
                         hgen_r=hgen_l
                     else:
                         hgen_r=self.query('r',nsite-i-2)
@@ -155,7 +226,13 @@ class DMRGEngine(object):
                     nsite_true=hgen_l.N+hgen_r.N+2
 
                     #run a step
-                    EG,err,phil=self.dmrg_step(hgen_l,hgen_r,direction=direction,tol=tol,maxN=m,block_params=block_params,initial_state=initial_state,symm_handler=symm_handler)
+                    if m<=50:
+                        e_estimate=None
+                    else:
+                        e_estimate=EG[0]
+                    EG,err,phil=self.dmrg_step(hgen_l,hgen_r,direction=direction,tol=tol,maxN=m,
+                            block_params=block_params,initial_state=initial_state,
+                            e_estimate=e_estimate,symm_handler=symm_handler)
                     #update LPART and RPART
                     print 'setting %s-site of left and %s-site of right.'%(hgen_l.N,hgen_r.N)
                     self.set('l',hgen_l,hgen_l.N)
@@ -188,7 +265,7 @@ class DMRGEngine(object):
                             initial_state=sum([self.state_prediction(phi,l=i+1,direction=direction) for phi in phil],axis=0)
                             initial_state=initial_state.ravel()
 
-                    EG=EG/nsite_true
+                    EG=EG #/nsite_true
                     if len(EL)>0:
                         diff=EG-EL[-1]
                     else:
@@ -250,7 +327,7 @@ class DMRGEngine(object):
                 break
         return EL
 
-    def dmrg_step(self,hgen_l,hgen_r,direction='->',tol=0,maxN=20,block_params={},initial_state=None,symm_handler=None):
+    def dmrg_step(self,hgen_l,hgen_r,direction='->',tol=0,maxN=20,block_params={},initial_state=None,e_estimate=None,symm_handler=None):
         '''
         Run a single step of DMRG iteration.
 
@@ -317,7 +394,7 @@ class DMRGEngine(object):
         if initial_state is None:
             initial_state=random.random(H.shape[0])
         if not symm_handler.isnull:
-            if hgen_l.N is not hgen_r.N:
+            if hgen_l is not hgen_r:
                 #Note, The cases to disable C2 symmetry,
                 #1. NL!=NR
                 #2. NL==NR, reflection is not used(and not the first iteration).
@@ -325,9 +402,7 @@ class DMRGEngine(object):
             else:
                 nl=bml.antiblockize(int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2)
                 symm_handler.update_handlers(n=nl,useC=True)
-            v00=initial_state
-            #v00=symm_handler.project_state(phi=initial_state)
-            #H=symm_handler.project_op(op=H)
+            v00=symm_handler.project_state(phi=initial_state)
             if hgen_l is hgen_r:
                 assert(symm_handler.check_op(H))
         else:
@@ -335,37 +410,30 @@ class DMRGEngine(object):
         t12=time.time()
 
         #perform diagonalization
-        ##1. detect specific block for diagonalization, get Hc and v0
+        ##1. detect specific block for diagonalization, get Hc, v0 and projector
+        projector=symm_handler.get_projector() if len(symm_handler.symms)!=0 else None
         if self.bmg is None or target_block is None:
             Hc=H
             bm_tot=None
-            v0=v00
-            #e,v,bm_tot,H_bd=eigbsh(H,nsp=500,tol=tol*1e-2,which='S',maxiter=5000)
-            #v=bm_tot.antiblockize(v).toarray()
-            #vl=[v]
+            v0=v00/norm(v00)
         else:
             if hasattr(target_block,'__call__'):
                 target_block=target_block(nsite=hgen_l.N+hgen_r.N)
             bm_tot=self.bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
             Hc=bm_tot.lextract_block_pre(H,(target_block,target_block))
-            v0=bm_tot.lextract_block_pre(bm_tot.blockize(v00),(target_block,))
+            v0=bm_tot.lextract_block_pre(v00,(target_block,))
+            if projector is not None:
+                projector=bm_tot.lextract_block_pre(projector,(target_block,target_block))
 
         ##2. diagonalize to get desired number of levels
         detect_C2=symm_handler.target_sector.has_key('C')# and not symm_handler.useC
-        k=max(nlevel,symm_handler.C_detect_scope if detect_C2 else 1)
-        #M=None# if len(symm_handler.symms)==0 else symm_handler.get_projector()
         t1=time.time()
         print 'blockization ->',t1-t12
-        if Hc.shape[0]<400:
-            e,v=eigh(Hc.toarray())
-            e,v=e[:k],v[:,:k]
-        else:
-            try:
-                e,v=eigsh(Hc,k=k,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0)
-            except:
-                e,v=eigsh(Hc,k=k+1,which='SA',maxiter=5000,tol=tol*1e-2,v0=v0)
-        order=argsort(e)
-        e,v=e[order],v[:,order]
+        if norm(v0)==0:
+            warnings.warn('Empty v0')
+            v0=None
+        e,v=self._eigsh(Hc,v0,sigma=e_estimate,projector=projector,
+                lc_search_space=symm_handler.C_detect_scope if detect_C2 else 1,k=nlevel)
         t2=time.time()
         ##3. permute back eigen-vectors into original representation al,sl+1,sl+2,al+2
         if bm_tot is not None:
@@ -379,15 +447,19 @@ class DMRGEngine(object):
         #Get the overlap with the original state and detect the specific C2 block.
         #using state prediction if blocks are asymmetric.
         #using symmetry handler if blocks are symmetric.
-        overlaps=array([abs(v00.dot(vi.conj()))/norm(v00)/norm(vi) for vi in vl])
-        if detect_C2 and symm_handler.useC:  #use symmetry projection to detect C2
-            indices=symm_handler.locate(vl)
-            print 'We find %s states meeting requirements, will take 1.'%len(indices)
-            e,vl=array([e[indices[0]]]),[vl[indices[0]]]
-        elif detect_C2:  #use state prediction to detect C2
-            ind=argmax(overlaps)
-            e,vl,overlaps=array([e[ind]]),[vl[ind]],[overlaps[ind]]
-        print 'The goodness of the estimate -> %s'%(overlaps[0])
+
+        #overlaps=array([abs(v00.dot(vi.conj()))/norm(v00)/norm(vi) for vi in vl])
+        #print overlaps
+        #pdb.set_trace()
+        #if detect_C2 and symm_handler.useC:  #use symmetry projection to detect C2
+        #    indices=symm_handler.locate(vl)
+        #    print 'We find %s states meeting requirements, will take 1.'%len(indices)
+        #    e,vl=array([e[indices[0]]]),[vl[indices[0]]]
+        #elif detect_C2:  #use state prediction to detect C2
+        #    ind=argmax(overlaps)
+        #    e,vl,overlaps=array([e[ind]]),[vl[ind]],[overlaps[ind]]
+        #print 'The goodness of the estimate -> %s'%(overlaps[0])
+        #pdb.set_trace()
 
         #Do-wavefunction analysis, preliminary truncation is performed(up to ZERO_REF).
         for v in vl:
