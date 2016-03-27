@@ -15,7 +15,6 @@ from tba.lattice import Chain
 from rglib.mps import op2collection
 from rglib.hexpand import RGHGen,NullEvolutor,MaskedEvolutor,Evolutor
 from lanczos import get_H,get_H_bm
-from blockmatrix import get_bmgen
 from dmrg import *
 
 swap_axis=True
@@ -96,10 +95,11 @@ class TestFH(object):
         spaceconfig=self.spaceconfig1
         H_serial=op2collection(op=self.model_occ.hgen.get_opH())
         expander3=RGHGen(spaceconfig=spaceconfig,H=H_serial,evolutor_type='masked',use_zstring=True)
-        bmgen=get_bmgen(spaceconfig,'QM')
-        dmrgegn=DMRGEngine(hgen=expander3,tol=0,bmg=bmgen,reflect=True)
+        dmrgegn=DMRGEngine(hgen=expander3,tol=0,reflect=True)
+        dmrgegn.use_U1_symmetry('QM')
         for c in [-1,1]:
-            EG2,EV2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[20,40,50,70,70],tol=0,block_params={'target_block':(0,0),'target_sector':{'C':c}})
+            dmrgegn.use_disc_symmetry(target_sector={'C':c,'P':-1},detect_scope=4)
+            EG2,EV2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[20,40,50,70,70],tol=0,target_block=(0,0))
             print 'Get gound state energy for C2 -> %s: %s.'%(c,EG2*nsite)
         #the result is -36.1372 for C=-1, and -36.3414 for C=1
         pdb.set_trace()
@@ -134,9 +134,9 @@ class TestFH(object):
 
         #the solution through dmrg.
         expander3=RGHGen(spaceconfig=spaceconfig,H=H_serial,evolutor_type='masked',use_zstring=True)
-        bmgen=get_bmgen(expander3.spaceconfig,'QM')
-        dmrgegn=DMRGEngine(hgen=expander3,tol=0,bmg=bmgen,reflect=True)
-        EG2,Vmin2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0,block_params={'target_block':(0,0)})
+        dmrgegn=DMRGEngine(hgen=expander3,tol=0,reflect=True)
+        dmrgegn.use_U1_symmetry('QM')
+        EG2,Vmin2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0,target_block=(0,0))
         #check for states.
         assert_almost_equal(Emin_exact,EG2*H_serial.nsite,decimal=4)
         Vmin1=Vmin1[:,0]
@@ -152,9 +152,9 @@ class TestFH(object):
         print H2
 
     def test_all(self):
+        self.test_disc_symm(20)
         self.test_nonint()
         self.test_site_image()
-        self.test_disc_symm(20)
 
 
 TestFH().test_all()

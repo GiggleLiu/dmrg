@@ -13,6 +13,7 @@ from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker,svdb
 from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString,tensor
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
 from rglib.hexpand import signlib
+from blockmatrix import get_bmgen
 from disc_symm import SymmetryHandler
 from superblock import SuperBlock,site_image
 
@@ -29,20 +30,23 @@ class DMRGEngine(object):
         :bmg: <BlockMarkerGenerator>, the block marker generator.
         :tol: float, the tolerence, when maxN and tol are both set, we keep the lower dimension.
         :reflect: bool, True if left<->right reflect, can be used to shortcut the run time.
+        :symm_handler: <SymmetryHandler>, the discrete symmetry handler.
         :LPART/RPART: dict, the left/right scanning of hamiltonian generators.
         :_tails(private): list, the last item of A matrices, which is used to construct the <MPS>.
     '''
-    def __init__(self,hgen,bmg=None,tol=0,reflect=False):
+    def __init__(self,hgen,tol=0,reflect=False):
         self.tol=tol
         self.hgen=hgen
-        self.bmg=bmg
+
+        #the symmetries
         self.reflect=reflect
+        self.bmg=None
+        self.symm_handler=None
 
         #claim attributes with dummy values.
         self._tails=None
         self.LPART=None
         self.RPART=None
-        self.reset()
 
     @property
     def nsite(self):
@@ -97,7 +101,32 @@ class DMRGEngine(object):
             hgen_r.evolutees['H'].opc.insert_Zs(spaceconfig=hgen_r.spaceconfig)
             self.RPART={0:hgen_r}
 
-    def run_finite(self,endpoint=None,tol=0,maxN=20,block_params={}):
+    def use_disc_symmetry(self,target_sector,detect_scope=2):
+        '''
+        Use specific discrete symmetry.
+
+        Parameters:
+            :target_sector: dict, {name:parity} pairs.
+            :detect_scope:
+        '''
+        if target_sector.has_key('C') and not self.reflect:
+            raise Exception('Using C2 symmetry without reflection symmetry is unreliable, forbiden for safety!')
+        symm_handler=SymmetryHandler(target_sector,detect_scope=detect_scope)
+        if target_sector.has_key('P'):  #register flip evolutee.
+            handler=symm_handler.handlers['P']
+            self.hgen.register_evolutee('P',opc=prod([handler.P(i) for i in xrange(self.hgen.nsite)]),initial_data=sps.identity(1))
+        if target_sector.has_key('J'):  #register p-h evolutee.
+            handler=symm_handler.handlers['J']
+            self.hgen.register_evolutee('J',opc=prod([handler.J(i) for i in xrange(self.hgen.nsite)]),initial_data=sps.identity(1))
+        self.symm_handler=symm_handler
+
+    def use_U1_symmetry(self,qnumber):
+        '''
+        Use specific U1 symmetry.
+        '''
+        self.bmg=get_bmgen(self.hgen.spaceconfig,qnumber)
+
+    def run_finite(self,endpoint=None,tol=0,maxN=20,nlevel=1,target_block=None):
         '''
         Run the application.
 
@@ -105,9 +134,7 @@ class DMRGEngine(object):
             :endpoint: tuple, the end position tuple of (scan, direction, size of left-block).
             :tol: float, the rolerence of energy.
             :maxN: int, maximum number of kept states and the tolerence for truncation weight.
-            :block_params: dict, the parameters for block specification, key words:
-
-                * target_block, the target block to evaluate the ground state energy.
+            :target_block: function/tuple/int, the target block(or generator as a function of nsite) to evaluate the ground state energy.
 
         Return:
             tuple, the ground state energy and the ground state(in <MPS> form).
@@ -116,14 +143,11 @@ class DMRGEngine(object):
         #check the validity of datas.
         if isinstance(self.hgen.evolutor,NullEvolutor):
             raise ValueError('The evolutor must not be null!')
-        symm_handler=SymmetryHandler(dict(block_params.get('target_sector',{})),C_detect_scope=block_params.get('C_detect_scope',2))
-        nlevel=block_params.get('nlevel',1)
-        if not symm_handler.isnull and nlevel!=1:
+        if not self.symm_handler.isnull and nlevel!=1:
             raise NotImplementedError('The symmetric Handler can not be used in multi-level calculation!')
-        if not symm_handler.isnull and self.bmg is None:
+        if not self.symm_handler.isnull and self.bmg is None:
             raise NotImplementedError('The symmetric Handler can not without Block marker generator!')
-        if 'C' in symm_handler.symms and not self.reflect:
-            raise Exception('Using C2 symmetry without reflection symmetry is unreliable, forbiden for safety!')
+        self.reset()
 
         nsite=self.hgen.nsite
         if endpoint is None: endpoint=(4,'<-',0)
@@ -155,7 +179,7 @@ class DMRGEngine(object):
                     nsite_true=hgen_l.N+hgen_r.N+2
 
                     #run a step
-                    EG,err,phil=self.dmrg_step(hgen_l,hgen_r,direction=direction,tol=tol,maxN=m,block_params=block_params,initial_state=initial_state,symm_handler=symm_handler)
+                    EG,err,phil=self.dmrg_step(hgen_l,hgen_r,direction=direction,tol=tol,maxN=m,target_block=target_block,nlevel=nlevel,initial_state=initial_state)
                     #update LPART and RPART
                     print 'setting %s-site of left and %s-site of right.'%(hgen_l.N,hgen_r.N)
                     self.set('l',hgen_l,hgen_l.N)
@@ -205,27 +229,26 @@ class DMRGEngine(object):
                         else:
                             EG_PRE=EG
 
-    def run_infinite(self,maxiter=50,tol=0,maxN=20,block_params={}):
+    def run_infinite(self,maxiter=50,tol=0,maxN=20,nlevel=1,target_block=None):
         '''
         Run the application.
 
-        maxiter:
-            The maximum iteration times.
-        tol:
-            The rolerence of energy.
-        maxN:
-            Maximum number of kept states and the tolerence for truncation weight.
+        Parameters:
+            :maxiter: int, the maximum iteration times.
+            :tol: float, the rolerence of energy.
+            :maxN: int/list, maximum number of kept states and the tolerence for truncation weight.
+            :target_block: function/tuple/int, the target block(or generator as a function of nsite) to evaluate the ground state energy.
+
+        Return:
+            tuple of EG,MPS.
         '''
         if isinstance(self.hgen.evolutor,NullEvolutor):
             raise ValueError('The evolutor must not be null!')
-        symm_handler=SymmetryHandler(dict(block_params.get('target_sector',{})),C_detect_scope=block_params.get('C_detect_scope',3))
-        nlevel=block_params.get('nlevel',1)
-        if not symm_handler.isnull and nlevel!=1:
+        if not self.symm_handler.isnull and nlevel!=1:
             raise NotImplementedError('The symmetric Handler can not be used in multi-level calculation!')
-        if not symm_handler.isnull and self.bmg is None:
+        if not self.symm_handler.isnull and self.bmg is None:
             raise NotImplementedError('The symmetric Handler can not without Block marker generator!')
-        if not self.reflect and symm_handler.has_symmetry('C'):
-            warnings.warn('Using reflection symmetry but no reflection, not reliable!!!!!!!!!!')
+        self.reset()
 
         EL=[]
         hgen=copy.deepcopy(self.hgen)
@@ -236,7 +259,7 @@ class DMRGEngine(object):
         for i in xrange(maxiter):
             print 'Running iteration %s'%i
             t0=time.time()
-            EG,err,phil=self.dmrg_step(hgen,hgen,tol=tol,block_params=block_params,symm_handler=symm_handler)
+            EG,err,phil=self.dmrg_step(hgen,hgen,tol=tol,target_block=target_block,nlevel=nlevel)
             EG=EG/(2.*(i+1))
             if len(EL)>0:
                 diff=EG-EL[-1]
@@ -248,9 +271,9 @@ class DMRGEngine(object):
             if abs(diff)<tol:
                 print 'Breaking!'
                 break
-        return EL
+        return EG,self.get_mps(phi=phil[0],l=i+1,direction=direction)
 
-    def dmrg_step(self,hgen_l,hgen_r,direction='->',tol=0,maxN=20,block_params={},initial_state=None,symm_handler=None):
+    def dmrg_step(self,hgen_l,hgen_r,direction='->',tol=0,maxN=20,target_block=None,nlevel=1,initial_state=None):
         '''
         Run a single step of DMRG iteration.
 
@@ -263,7 +286,6 @@ class DMRGEngine(object):
             :tol: float, the rolerence.
             :maxN: int, maximum number of kept states and the tolerence for truncation weight.
             :initial_state: 1D array/None, the initial state(prediction), None for random.
-            :symm_handler: <SymmetryHandler>, the symmetry handler instance.
 
         Return:
             tuple of (ground state energy(float), unitary matrix(2D array), kpmask(1D array of bool), truncation error(float))
@@ -277,18 +299,18 @@ class DMRGEngine(object):
         ndiml,ndimr=ndiml0*hndim,ndimr0*hndim
         #filter operators to extract left-only and right-only blocks.
         interop=filter(lambda op:isinstance(op,OpString) and (NL+1 in op.siteindex),hgen_l.hchain.query(NL))  #site NL and NL+1
-        HL0=hgen_l.expand1()['H']
+        OPL=hgen_l.expand1()
+        HL0=OPL['H']
         #expansion can not do twice to the same hamiltonian generator!
         if hgen_r is hgen_l:
-            HR0=HL0
+            OPR,HR0=OPL,HL0
         else:
-            HR0=hgen_r.expand1()['H']
+            OPR=hgen_r.expand1()
+            HR0=OPR['H']
 
         #blockize HL0 and HR0
-        nlevel=block_params.get('nlevel',1)
         NL,NR=hgen_l.N,hgen_r.N
         if self.bmg is not None:
-            target_block=block_params.get('target_block')
             n=max(NL,NR)
             if isinstance(hgen_l.evolutor,MaskedEvolutor) and n>1:
                 kpmask_l=hgen_l.evolutor.kpmask(NL-2)     #kpmask is also related to block marker!!!
@@ -298,7 +320,6 @@ class DMRGEngine(object):
             bml=self.bmg.update_blockmarker(hgen_l.block_marker,kpmask=kpmask_l,nsite=NL)
             bmr=self.bmg.update_blockmarker(hgen_r.block_marker,kpmask=kpmask_r,nsite=NR)
         else:
-            target_block=None
             bml=None #get_blockmarker(HL0)
             bmr=None #get_blockmarker(HR0)
         t10=time.time()
@@ -316,20 +337,20 @@ class DMRGEngine(object):
         #get the starting eigen state v00!
         if initial_state is None:
             initial_state=random.random(H.shape[0])
-        if not symm_handler.isnull:
+        if not self.symm_handler.isnull:
             if hgen_l.N is not hgen_r.N:
                 #Note, The cases to disable C2 symmetry,
                 #1. NL!=NR
                 #2. NL==NR, reflection is not used(and not the first iteration).
-                symm_handler.update_handlers(useC=False)
+                self.symm_handler.update_handlers(OPL=OPL,OPR=OPR,useC=False)
             else:
                 nl=bml.antiblockize(int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2)
-                symm_handler.update_handlers(n=nl,useC=True)
+                self.symm_handler.update_handlers(OPL=OPL,OPR=OPR,n=nl,useC=True)
             v00=initial_state
-            #v00=symm_handler.project_state(phi=initial_state)
-            #H=symm_handler.project_op(op=H)
-            if hgen_l is hgen_r:
-                assert(symm_handler.check_op(H))
+            v00=self.symm_handler.project_state(phi=initial_state)
+            #H=self.symm_handler.project_op(op=H)
+            assert(self.symm_handler.check_op(H))
+            #M=None if len(self.symm_handler.symms)==0 else self.symm_handler.get_projector()
         else:
             v00=initial_state
         t12=time.time()
@@ -351,12 +372,11 @@ class DMRGEngine(object):
             v0=bm_tot.lextract_block_pre(bm_tot.blockize(v00),(target_block,))
 
         ##2. diagonalize to get desired number of levels
-        detect_C2=symm_handler.target_sector.has_key('C')# and not symm_handler.useC
-        k=max(nlevel,symm_handler.C_detect_scope if detect_C2 else 1)
-        #M=None# if len(symm_handler.symms)==0 else symm_handler.get_projector()
+        detect_C2=self.symm_handler.target_sector.has_key('C')# and not symm_handler.useC
+        k=min(Hc.shape[0]-1,max(nlevel,self.symm_handler.detect_scope if detect_C2 else 1))
         t1=time.time()
         print 'blockization ->',t1-t12
-        if Hc.shape[0]<400:
+        if Hc.shape[0]<0:
             e,v=eigh(Hc.toarray())
             e,v=e[:k],v[:,:k]
         else:
@@ -380,10 +400,11 @@ class DMRGEngine(object):
         #using state prediction if blocks are asymmetric.
         #using symmetry handler if blocks are symmetric.
         overlaps=array([abs(v00.dot(vi.conj()))/norm(v00)/norm(vi) for vi in vl])
-        if detect_C2 and symm_handler.useC:  #use symmetry projection to detect C2
-            indices=symm_handler.locate(vl)
-            print 'We find %s states meeting requirements, will take 1.'%len(indices)
-            e,vl=array([e[indices[0]]]),[vl[indices[0]]]
+        if detect_C2 and self.symm_handler.useC:  #use symmetry projection to detect C2
+            overlaps=array([self.symm_handler.check_parity(v) for v in vl])
+            print e,overlaps
+            indices=where(overlaps>0.5)[0]
+            e,vl,overlaps=array([e[indices[0]]]),[vl[indices[0]]],[overlaps[indices[0]]]
         elif detect_C2:  #use state prediction to detect C2
             ind=argmax(overlaps)
             e,vl,overlaps=array([e[ind]]),[vl[ind]],[overlaps[ind]]

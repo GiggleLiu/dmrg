@@ -5,10 +5,11 @@ Discrete symmetries.
 from numpy import *
 from scipy import sparse as sps
 from scipy.linalg import norm
-import pdb
+import pdb,copy
 
 from rglib.mps import OpUnit
 from tba.lattice import ind2c,c2ind
+from rglib.hexpand.utils import kron
 
 __all__=['DiscSymm','PHSymm','FlipSymm','C2Symm','SymmetryHandler']
 
@@ -117,18 +118,21 @@ class DiscSymm(object):
             comps.append(comp.dot(phi.conj()))
         return comps
 
-    def update(self,**kwargs):
+    def update(self,data):
         '''
         Update this symmetry projection operator.
+
+        Parameters:
+            :data: matrix, new data
         '''
-        raise NotImplementedError()
+        self._proj=data
 
 class PHSymm(DiscSymm):
     '''
     Particle hole symmetry.
     '''
     def __init__(self,proj=None):
-        super(PHSymm,self).__init__('ph',proj)
+        super(PHSymm,self).__init__('J',proj)
 
     def J(self,i):
         '''
@@ -142,7 +146,7 @@ class PHSymm(DiscSymm):
         data[3,0]=1
         data[1,1]=(-1)**i
         data[2,2]=(-1)**i
-        ou=OpUnit(label='J',siteindex=i)
+        ou=OpUnit(label='J',data=data,siteindex=i)
         return ou
 
 class FlipSymm(DiscSymm):
@@ -150,7 +154,14 @@ class FlipSymm(DiscSymm):
     Spin flip symmetry.
     '''
     def __init__(self,proj=None):
-        super(FlipSymm,self).__init__('sf',proj)
+        super(FlipSymm,self).__init__('P',proj)
+        data=zeros([4,4],dtype='int32')
+        data[0,0]=1
+        data[3,3]=-1
+        data[1,2]=1
+        data[2,1]=1
+        ou=OpUnit(label='P',data=data)
+        self._P=ou
 
     def P(self,i):
         '''
@@ -159,12 +170,8 @@ class FlipSymm(DiscSymm):
         Parameters:
             :i: int, the site index.
         '''
-        data=zeros([4,4],dtype='int32')
-        data[0,0]=1
-        data[3,3]=-1
-        data[1,2]=1
-        data[2,1]=1
-        ou=OpUnit(label='P',siteindex=i)
+        ou=copy.copy(self._P)
+        ou.siteindex=i
         return ou
 
 class C2Symm(DiscSymm):
@@ -172,11 +179,14 @@ class C2Symm(DiscSymm):
     space left-right reflection symmetry.
     '''
     def __init__(self,proj=None):
-        super(C2Symm,self).__init__('c2',proj)
+        super(C2Symm,self).__init__('C',proj)
 
-    def update(self,n,**kwargs):
+    def update(self,n):
         '''
         update the projection matrix.
+
+        Parameters:
+            :n: 1D array, the number of electrons in left-right blocks.
         '''
         N=len(n)**2
         base=array([len(n)]*2)
@@ -196,7 +206,7 @@ class SymmetryHandler(object):
         :target_sector: dict, the target sector {parity label, sector}
         :handlers: dict, the handlers.
         :useC: bool, use good quantum number C2.
-        :C_detect_scope: integer, the number of lowest levels to get \
+        :detect_scope: integer, the number of lowest levels to get \
                 in order to search for the lowest state with specific C2 parity.
 
     Note:
@@ -206,11 +216,11 @@ class SymmetryHandler(object):
         * 'J', Particle hole symmetry.
         * 'P', Spin flip symmetry.
     '''
-    def __init__(self,target_sector,C_detect_scope=2):
+    def __init__(self,target_sector,detect_scope=2):
         self.target_sector=target_sector
         self.handlers={}
         self.useC=True
-        self.C_detect_scope=C_detect_scope
+        self.detect_scope=detect_scope
         for symm in target_sector:
             if symm=='C':
                 self.handlers['C']=C2Symm()
@@ -284,19 +294,26 @@ class SymmetryHandler(object):
             op=handler.project_op(op,parity=target_sector[symm])
         return op
 
-    def update_handlers(self,useC=True,**kwargs):
+    def update_handlers(self,OPL=None,OPR=None,n=None,useC=True):
         '''
         Update handlers using provided parameters.
 
-        Key Word Parameters:
-
-            * `n`, integer, the number of particle for left-right blocks, used for C2 symmetry.
+        Parameters:
+            :n:, integer, the number of particle for left-right blocks, used for C2 symmetry.
+            :OPL/OPR: dict, the {name:matrix} tuple to store the operator information.
         '''
         self.useC=useC
         if self.has_symmetry('C'):
-            assert('n' in kwargs)
-        for symm in self.symms:
-            self.handlers[symm].update(**kwargs)
+            if n is None:
+                raise Exception('n is required for C symmetry.')
+            else:
+                self.handlers['C'].update(n=n)
+        for symm in ['J','P']:
+            if self.has_symmetry(symm):
+                if not OPL.has_key(symm) or not OPR.has_key(symm):
+                    raise Exception('Can not find key %s in data.'%symm)
+                data=kron(OPL[symm],OPR[symm])
+                self.handlers[symm].update(data=data)
 
     def has_symmetry(self,symm):
         '''
@@ -330,8 +347,7 @@ class SymmetryHandler(object):
             bool, the state is qualified or not.
         '''
         overlap=abs(phi.dot(self.project_state(phi).conj()))/norm(phi)**2
-        print 'Checking symmetry and get overlap -> %s'%overlap
-        return overlap>0.45
+        return overlap
 
     def locate(self,phis):
         '''
@@ -343,4 +359,4 @@ class SymmetryHandler(object):
         Return:
             1D array, the index of states meeting requirements.
         '''
-        return where([self.check_parity(phi) for phi in phis])[0]
+        return where([self.check_parity(phi)>0.45 for phi in phis])[0]
