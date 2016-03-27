@@ -81,6 +81,7 @@ class DMRGEngine(object):
                 else:
                     e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,maxiter=maxiter,sigma=sigma,which='SL',\
                             iprint=iprint,converge_bound=1e-10)
+                print 'The goodness of estimate -> %s'%(v0.conj()/norm(v0)).dot(v[:,0])
 
         nstate=len(e)
         if nstate==0:
