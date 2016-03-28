@@ -85,7 +85,6 @@ class DMRGEngine(object):
                 else:
                     e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,maxiter=maxiter,sigma=sigma,which='SL',\
                             iprint=iprint,converge_bound=1e-10)
-                print 'The goodness of estimate -> %s'%(v0.conj()/norm(v0)).dot(v[:,0])
 
         nstate=len(e)
         if nstate==0:
@@ -116,7 +115,6 @@ class DMRGEngine(object):
             istate=argmax(overlaps)
             if overlaps[0]<0.7:
                 warnings.warn('Do not find any states same correspond to the one from last iteration!')
-            print 'The goodness of estimate -> %s'%overlaps[istate]
         e,v=e[istate:istate+1],v[:,istate:istate+1]
         return e,v
 
@@ -273,13 +271,13 @@ class DMRGEngine(object):
                     initial_state=None   #restore initial state.
                     phi=phil[0]
                     if nsite==nsite_true:
-                        if self.reflect and nsite%2==0 and ((i==nsite/2-2 and direction=='->') or (i==nsite/2 and direction=='<-')):
+                        if self.reflect and nsite%2==0 and (i==nsite/2-2 and direction=='->'):
                             #Prediction can not be used:
                             #when we are going to calculate the symmetry point
                             #and use the reflection symmetry.
                             #for the right block is instantly replaced by another hamiltonian generator,
                             #which is not directly connected to the current hamiltonian generator.
-                            initial_state=None
+                            initial_state=sum([self.state_prediction(phi,l=i+1,direction=direction) for phi in phil],axis=0).ravel()
                         elif direction=='->' and i==nsite-2:  #for the case without reflection.
                             initial_state=phil[0].ravel()
                         elif direction=='<-' and i==0:
@@ -455,6 +453,7 @@ class DMRGEngine(object):
             v0=None
         e,v=self._eigsh(Hc,v0,sigma=e_estimate,projector=projector,
                 lc_search_space=self.symm_handler.detect_scope if detect_C2 else 1,k=nlevel)
+        print 'The goodness of estimate -> %s'%(v0.conj()/norm(v0)).dot(v[:,0])
         t2=time.time()
         ##3. permute back eigen-vectors into original representation al,sl+1,sl+2,al+2
         if bm_tot is not None:
@@ -602,17 +601,19 @@ class DMRGEngine(object):
             reference -> PRL 77. 3633
         '''
         assert(direction=='<-' or direction=='->')
-        phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
         nsite=self.hgen.nsite
         NL,NR=l,nsite-l
+        phi=tensor.Tensor(phi,labels=['a_%s'%(NL-1),'s_%s'%(NL),'b_%s'%(NR-1),'t_%s'%NR]) #l=NL-1
+        if self.reflect and nsite%2==0 and l==nsite/2-1 and direction=='->':   #hard prediction!
+            return self._state_prediction_hard(phi)
         hgen_l,hgen_r=self.query('l',NL),self.query('r',NR)
         lr=NR-2 if direction=='->' else NR-1
         ll=NL-1 if direction=='->' else NL-2
         A=hgen_l.evolutor.A(ll,dense=True)   #get A[sNL](NL-1,NL)
         B=hgen_r.evolutor.A(lr,dense=True)   #get B[sNR](NL+1,NL+2)
         if direction=='->':
-            A=tensor.Tensor(A,labels=['sl+1','al','al+1']).conj()
-            B=tensor.Tensor(B,labels=['sl+3','al+3','al+2']).conj()    #!the conjugate?
+            A=tensor.Tensor(A,labels=['s_%s'%NL,'a_%s'%(NL-1),'a_%s'%NL]).conj()
+            B=tensor.Tensor(B,labels=['t_%s'%(NR-1),'b_%s'%(NR-2),'b_%s'%(NR-1)])#.conj()    #!the conjugate? right side shrink, so B(al,al+1) do not conjugate.
             phi=tensor.contract([A,phi,B])
             phi=phi.chorder([0,1,3,2])
             if hgen_r.use_zstring:  #cope with the sign problem
@@ -621,8 +622,8 @@ class DMRGEngine(object):
                 n_tot=n1[:,newaxis,newaxis]*(nr[:,newaxis]+n1)
                 phi=phi*(1-2*(n_tot%2))
         else:
-            A=tensor.Tensor(A,labels=['sl','al-1','al']).conj()
-            B=tensor.Tensor(B,labels=['sl+2','al+2','al+1']).conj()    #!the conjugate?
+            A=tensor.Tensor(A,labels=['s_%s'%(NL-1),'a_%s'%(NL-2),'a_%s'%(NL-1)])#.conj()
+            B=tensor.Tensor(B,labels=['t_%s'%NR,'b_%s'%(NR-1),'b_%s'%NR]).conj()    #!the conjugate?
             phi=tensor.contract([A,phi,B])
             phi=phi.chorder([1,0,3,2])
             if hgen_r.use_zstring:  #cope with the sign problem
@@ -630,6 +631,39 @@ class DMRGEngine(object):
                 nr=(1-hgen_r.zstring(lr+1).diagonal())/2
                 n_tot=n1*(nr[:,newaxis])
                 phi=phi*(1-2*(n_tot%2))
+        return phi
+
+    def _state_prediction_hard(self,phi):
+        '''
+        The hardest prediction for reflection point for phi(al,sl+1,sl+2,al+2) -> phi(al-1,sl,sl+1,al+1')
+        '''
+        nsite=self.hgen.nsite
+        l=nsite/2
+        hgen_l,hgen_r0,hgen_r=self.query('l',l-1),self.query('r',l+2),self.query('r',l-1)
+        #do regular evolution to phi(al,sl+1,sl+2,al+2) -> phi(al-1,sl,sl+1,al+1)
+        A=hgen_l.evolutor.A(l-2,dense=True)   #get A[sNL](NL-1,NL)
+        B=hgen_r0.evolutor.A(l-1,dense=True)   #get B[sNR](NL+1,NL+2)
+        A=tensor.Tensor(A,labels=['s_%s'%(l-1),'a_%s'%(l-2),'a_%s'%(l-1)])
+        B=tensor.Tensor(B,labels=['t_%s'%l,'b_%s'%(l-1),'b_%s'%(l)]).conj()
+        phi=tensor.contract([A,phi,B])
+        if hgen_r.use_zstring:  #cope with the sign problem
+            n1=(1-Z4scfg(hgen_l.spaceconfig).diagonal())/2
+            nr=(1-hgen_r0.zstring(l-1).diagonal())/2
+            n_tot=n1[:,newaxis,newaxis]*(nr+n1[:,newaxis])
+            phi=phi*(1-2*(n_tot%2))
+        #do the evolution from phi(al-1,sl,sl+1,al+1) -> phi(al-1,sl,sl+1,al+1')
+        #first calculate tensor R(al+1',al+1), right one incre, left decre.
+        BL0=hgen_r0.evolutor.get_AL(dense=True)[:l-1]
+        BL=hgen_r.evolutor.get_AL(dense=True)
+        BL0=[tensor.Tensor(bi,labels=['t_%s'%(i+1),'b_%s'%i,'b_%s'%(i+1)]) for i,bi in enumerate(BL0)]
+        BL=[tensor.Tensor(bi,labels=['t_%s'%(i+1),'b_%s'%i+('\'' if i!=0 else ''),'b_%s\''%(i+1)]).conj() for i,bi in enumerate(BL)]
+        R=BL[0]*BL0[0]
+        for i in xrange(1,l-1):
+            R=tensor.contract([R,BL0[i],BL[i]])
+        #second, calculate phi*R
+        phi=phi*R
+
+        phi=phi.chorder([0,1,3,2])
         return phi
 
     def get_mps(self,phi,l,labels=['s','a'],direction=None):
