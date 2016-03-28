@@ -32,15 +32,17 @@ class DMRGEngine(object):
         :bmg: <BlockMarkerGenerator>, the block marker generator.
         :tol: float, the tolerence, when maxN and tol are both set, we keep the lower dimension.
         :reflect: bool, True if left<->right reflect, can be used to shortcut the run time.
-        :symm_handler: <SymmetryHandler>, the discrete symmetry handler.
         :eigen_solver: str,
             
             * 'JD', Jacobi-Davidson iteration.
             * 'LC', Lanczos, algorithm.
+        :iprint: int, the redundency level of output information, 0 for None, 10 for debug.
+
+        :symm_handler: <SymmetryHandler>, the discrete symmetry handler.
         :LPART/RPART: dict, the left/right scanning of hamiltonian generators.
         :_tails(private): list, the last item of A matrices, which is used to construct the <MPS>.
     '''
-    def __init__(self,hgen,tol=0,reflect=False,eigen_solver='JD'):
+    def __init__(self,hgen,tol=0,reflect=False,eigen_solver='JD',iprint=1):
         self.tol=tol
         self.hgen=hgen
 
@@ -55,13 +57,15 @@ class DMRGEngine(object):
         self.LPART=None
         self.RPART=None
 
-    def _eigsh(self,H,v0,projector=None,tol=1e-12,sigma=None,check_commute=True,lc_search_space=1,k=1):
+        self.iprint=iprint
+
+    def _eigsh(self,H,v0,projector=None,tol=1e-12,sigma=None,lc_search_space=1,k=1):
         '''
         solve eigenvalue problem.
         '''
         maxiter=5000
         N=H.shape[0]
-        if projector is not None and check_commute:
+        if self.iprint==10 and projector is not None and check_commute:
             assert(is_commute(H,projector))
         if self.eigen_solver=='LC':
             k=max(lc_search_space,k)
@@ -425,7 +429,7 @@ class DMRGEngine(object):
                 nl=bml.antiblockize(int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2)
                 self.symm_handler.update_handlers(OPL=OPL,OPR=OPR,n=nl,useC=True)
             v00=self.symm_handler.project_state(phi=initial_state)
-            assert(self.symm_handler.check_op(H))
+            if self.iprint==10:assert(self.symm_handler.check_op(H))
         else:
             v00=initial_state
         t12=time.time()
@@ -525,7 +529,7 @@ class DMRGEngine(object):
         spec_r=S2.T.conj().dot(S2).diagonal().real
 
         if use_bm:
-            if not (bml.check_blockdiag(U.dot(sps.diags(spec_l,0)).dot(U.T.conj())) and\
+            if self.iprint==10 and not (bml.check_blockdiag(U.dot(sps.diags(spec_l,0)).dot(U.T.conj())) and\
                     bmr.check_blockdiag((V.T.conj().dot(sps.diags(spec_r,0))).dot(V))):
                 raise Exception('''Density matrix is not block diagonal, which is not expected,
         1. make sure your are using additive good quantum numbers.
@@ -571,7 +575,7 @@ class DMRGEngine(object):
             bm=bmr
         if bm is not None:
             rho=bm.blockize(rho)
-            if not bm.check_blockdiag(rho,tol=1e-5):
+            if self.iprint==10 and not bm.check_blockdiag(rho,tol=1e-5):
                 ion()
                 pcolor(exp(abs(rho.toarray().real)))
                 bm.show()
