@@ -117,8 +117,8 @@ class DMRGEngine(object):
             v0H=v0.conj()/norm(v0)
             overlaps=array([abs(v0H.dot(v[:,i])) for i in xrange(nstate)])
             istate=argmax(overlaps)
-            if overlaps[0]<0.7:
-                warnings.warn('Do not find any states same correspond to the one from last iteration!')
+            if overlaps[istate]<0.7:
+                warnings.warn('Do not find any states same correspond to the one from last iteration!%s'%overlaps)
         e,v=e[istate:istate+1],v[:,istate:istate+1]
         return e,v
 
