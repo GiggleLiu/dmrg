@@ -19,9 +19,15 @@ from disc_symm import SymmetryHandler
 from superblock import SuperBlock,site_image
 from pydavidson import JDh
 
+__all__=['site_image','SuperBlock','DMRGEngine']
+
 ZERO_REF=1e-10
 
-__all__=['site_image','SuperBlock','DMRGEngine']
+def _eliminate_zeros(A,zero_ref):
+    '''eliminate zeros from a sparse matrix.'''
+    if not isinstance(A,sps.csr_matrix): A=A.tocsr()
+    A.data[abs(A.data)<zero_ref]=0; A.eliminate_zeros()
+    return A
 
 class DMRGEngine(object):
     '''
@@ -93,7 +99,7 @@ class DMRGEngine(object):
         nstate=len(e)
         if nstate==0:
             raise Exception('No Converged Pair!!')
-        elif nstate==1:
+        elif nstate==k or k>1:
             return e,v
 
         #filter out states meeting projector.
@@ -112,7 +118,7 @@ class DMRGEngine(object):
             v=projector.dot(v[:,istate:istate+1])
             v=v/norm(v)
             return e[istate:istate+1],v
-        elif lc_search_space!=1:
+        else:
             #get the state with maximum overlap.
             v0H=v0.conj()/norm(v0)
             overlaps=array([abs(v0H.dot(v[:,i])) for i in xrange(nstate)])
@@ -403,7 +409,6 @@ class DMRGEngine(object):
             bml=None #get_blockmarker(HL0)
             bmr=None #get_blockmarker(HR0)
         t10=time.time()
-        print 'prepair intra ->',t10-t0
 
         H1,H2=kron(HL0,sps.identity(ndimr)),kron(sps.identity(ndiml),HR0)
         H=H1+H2
@@ -413,6 +418,8 @@ class DMRGEngine(object):
         for op in interop:
             Hin.append(sb.get_op(op))
         H=H+sum(Hin)
+        H=_eliminate_zeros(H,ZERO_REF)
+        t11=time.time()
 
         #get the starting eigen state v00!
         if initial_state is None:
@@ -430,7 +437,6 @@ class DMRGEngine(object):
             if self.iprint==10:assert(self.symm_handler.check_op(H))
         else:
             v00=initial_state
-        t12=time.time()
 
         #perform diagonalization
         ##1. detect specific block for diagonalization, get Hc, v0 and projector
@@ -451,10 +457,10 @@ class DMRGEngine(object):
         ##2. diagonalize to get desired number of levels
         detect_C2=self.symm_handler.target_sector.has_key('C')# and not symm_handler.useC
         t1=time.time()
-        print 'blockization ->',t1-t12
         if norm(v0)==0:
             warnings.warn('Empty v0')
             v0=None
+        print 'The density of Hamiltonian -> %s'%(1.*len(Hc.data)/Hc.shape[0]**2)
         e,v=self._eigsh(Hc,v0,sigma=e_estimate,projector=projector,
                 lc_search_space=self.symm_handler.detect_scope if detect_C2 else 1,k=nlevel)
         print 'The goodness of estimate -> %s'%(v0.conj()/norm(v0)).dot(v[:,0])
@@ -480,7 +486,7 @@ class DMRGEngine(object):
             #spec2,U2,kpmask2,trunc_error=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='r',maxN=maxN)
             hgen_r.trunc(U=U2,block_marker=bmr,kpmask=kpmask2)
         t3=time.time()
-        print 'Elapse -> prepair:%s, eigen:%s, trunc: %s'%(t1-t0,t2-t1,t3-t2)
+        print 'Elapse -> prepair:%s(intra %.2f,inter %.2f,blockize %.2f), eigen:%s, trunc: %s'%(t1-t0,t10-t0,t11-t10,t1-t11,t2-t1,t3-t2)
         phil=[phi.reshape([ndiml/hndim,hndim,ndimr/hndim,hndim]) for phi in vl]
         return e,trunc_error,phil
 
@@ -540,6 +546,7 @@ class DMRGEngine(object):
             kpmask[(spec>=spec_cut)&(spec>ZERO_REF)]=True
             trunc_error=sum(spec[~kpmask])
             kpmasks.append(kpmask)
+        U,U2=_eliminate_zeros(U,ZERO_REF),_eliminate_zeros(U2,ZERO_REF)
         return U,(spec_l,spec_r),U2,kpmasks,trunc_error
 
     def rdm_analysis(self,phis,bml,bmr,side,maxN):
