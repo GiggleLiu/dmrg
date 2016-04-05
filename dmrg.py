@@ -253,7 +253,7 @@ class DMRGEngine(object):
                     nsite_true=hgen_l.N+hgen_r.N+2
 
                     #run a step
-                    if m<=50:
+                    if n<=2:
                         e_estimate=None
                     else:
                         e_estimate=EG[0]
