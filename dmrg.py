@@ -206,7 +206,7 @@ class DMRGEngine(object):
         '''
         self.bmg=get_bmgen(self.hgen.spaceconfig,qnumber)
 
-    def run_finite(self,endpoint=None,tol=0,maxN=20,nlevel=1,target_block=None):
+    def run_finite(self,endpoint=None,tol=0,maxN=20,nlevel=1,target_block=None,call_before=None,call_after=None):
         '''
         Run the application.
 
@@ -214,7 +214,9 @@ class DMRGEngine(object):
             :endpoint: tuple, the end position tuple of (scan, direction, size of left-block).
             :tol: float, the rolerence of energy.
             :maxN: int, maximum number of kept states and the tolerence for truncation weight.
+            :nlevel: int, the number of desired energy levels.
             :target_block: function/tuple/int, the target block(or generator as a function of nsite) to evaluate the ground state energy.
+            :call_before/call_after: function/None, the function to call back before/after each iteration, using `DMRGEngine` as an parameter.
 
         Return:
             tuple, the ground state energy and the ground state(in <MPS> form).
@@ -246,6 +248,7 @@ class DMRGEngine(object):
                 for i in iterators[direction]:
                     print 'Running %s-th scan, iteration %s'%(n+1,i)
                     t0=time.time()
+                    if call_before is not None: call_before(self)
                     #setup generators and operators.
                     #The cases to use identical hamiltonian generator,
                     #1. the first half of first scan.
@@ -276,6 +279,7 @@ class DMRGEngine(object):
                         #2. when the block has not been expanded to full length and not reflecting.
                         self.set('r',hgen_r,hgen_r.N)
                         print 'set R = %s, size %s'%(hgen_r.N,hgen_r.ndim)
+                    if call_after is not None: call_back(self)
 
                     #do state prediction
                     initial_state=None   #restore initial state.
