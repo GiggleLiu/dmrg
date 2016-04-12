@@ -66,7 +66,7 @@ class DMRGEngine(object):
 
         self.iprint=iprint
         #status
-        self.status={'isweep':0,'direction':'->','pos':-1,'hgen_l':None,'hgen_r':None}
+        self.status={'isweep':0,'direction':'->','pos':0}
 
     def _eigsh(self,H,v0,projector=None,tol=1e-12,sigma=None,lc_search_space=1,k=1):
         '''
@@ -215,13 +215,13 @@ class DMRGEngine(object):
         '''Get the target block.'''
         target_block=self._target_block
         if hasattr(target_block,'__call__'):
-            n,pos=self.status['nsweep'],self.status['pos']
+            n,pos=self.status['isweep'],self.status['pos']
             nsite=self.nsite
             if n==0 and pos<nsite/2: nsite=pos*2
             target_block=target_block(nsite=nsite)
         return target_block
 
-    def run_finite(self,endpoint=None,tol=0,maxN=20,nlevel=1):
+    def run_finite(self,endpoint=None,tol=0,maxN=20,nlevel=1,call_before=None,call_after=None):
         '''
         Run the application.
 
@@ -229,6 +229,8 @@ class DMRGEngine(object):
             :endpoint: tuple, the end position tuple of (sweep, direction, size of left-block).
             :tol: float, the rolerence of energy.
             :maxN: int, maximum number of kept states and the tolerence for truncation weight.
+            :nlevel: int, the number of desired energy levels.
+            :call_before/call_after: function/None, the function to call back before/after each iteration, using `DMRGEngine` as an parameter.
 
         Return:
             tuple, the ground state energy and the ground state(in <MPS> form).
@@ -260,6 +262,8 @@ class DMRGEngine(object):
                 for i in iterators[direction]:
                     print 'Running %s-th sweep, iteration %s'%(n+1,i)
                     t0=time.time()
+                    self.status.update({'isweep':n,'pos':i+1,'direction':direction})
+                    if call_before is not None: call_before(self)
                     #setup generators and operators.
                     #The cases to use identical hamiltonian generator,
                     #1. the first half of first sweep.
@@ -271,7 +275,6 @@ class DMRGEngine(object):
                         hgen_r=self.query('r',nsite-i-2)
                     print 'A'*hgen_l.N+'..'+'B'*hgen_r.N
                     nsite_true=hgen_l.N+hgen_r.N+2
-                    self.status.update({'nsweep':n,'pos':i+1,'direction':direction,'hgen_l':hgen_l,'hgen_r':hgen_r})
 
                     #run a step
                     if n<=2:
@@ -290,6 +293,7 @@ class DMRGEngine(object):
                         #2. when the block has not been expanded to full length and not reflecting.
                         self.set('r',hgen_r,hgen_r.N)
                         print 'set R = %s, size %s'%(hgen_r.N,hgen_r.ndim)
+                    if call_after is not None: call_back(self)
 
                     #do state prediction
                     initial_state=None   #restore initial state.
