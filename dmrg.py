@@ -45,18 +45,19 @@ class DMRGEngine(object):
         :iprint: int, the redundency level of output information, 0 for None, 10 for debug.
 
         :symm_handler: <SymmetryHandler>, the discrete symmetry handler.
-        :LPART/RPART: dict, the left/right scanning of hamiltonian generators.
+        :LPART/RPART: dict, the left/right sweep of hamiltonian generators.
         :_tails(private): list, the last item of A matrices, which is used to construct the <MPS>.
     '''
     def __init__(self,hgen,tol=0,reflect=False,eigen_solver='JD',iprint=1):
         self.tol=tol
         self.hgen=hgen
+        self.eigen_solver=eigen_solver
 
         #the symmetries
         self.reflect=reflect
         self.bmg=None
+        self._target_block=None
         self.symm_handler=SymmetryHandler({},detect_scope=1)
-        self.eigen_solver=eigen_solver
 
         #claim attributes with dummy values.
         self._tails=None
@@ -64,6 +65,8 @@ class DMRGEngine(object):
         self.RPART=None
 
         self.iprint=iprint
+        #status
+        self.status={'isweep':0,'direction':'->','pos':-1,'hgen_l':None,'hgen_r':None}
 
     def _eigsh(self,H,v0,projector=None,tol=1e-12,sigma=None,lc_search_space=1,k=1):
         '''
@@ -200,21 +203,32 @@ class DMRGEngine(object):
             self.hgen.register_evolutee('J',opc=prod([handler.J(i) for i in xrange(self.hgen.nsite)]),initial_data=sps.identity(1))
         self.symm_handler=symm_handler
 
-    def use_U1_symmetry(self,qnumber):
+    def use_U1_symmetry(self,qnumber,target_block):
         '''
         Use specific U1 symmetry.
         '''
         self.bmg=get_bmgen(self.hgen.spaceconfig,qnumber)
+        self._target_block=target_block
 
-    def run_finite(self,endpoint=None,tol=0,maxN=20,nlevel=1,target_block=None):
+    @property
+    def target_block(self):
+        '''Get the target block.'''
+        target_block=self._target_block
+        if hasattr(target_block,'__call__'):
+            n,pos=self.status['nsweep'],self.status['pos']
+            nsite=self.nsite
+            if n==0 and pos<nsite/2: nsite=pos*2
+            target_block=target_block(nsite=nsite)
+        return target_block
+
+    def run_finite(self,endpoint=None,tol=0,maxN=20,nlevel=1):
         '''
         Run the application.
 
         Parameters:
-            :endpoint: tuple, the end position tuple of (scan, direction, size of left-block).
+            :endpoint: tuple, the end position tuple of (sweep, direction, size of left-block).
             :tol: float, the rolerence of energy.
             :maxN: int, maximum number of kept states and the tolerence for truncation weight.
-            :target_block: function/tuple/int, the target block(or generator as a function of nsite) to evaluate the ground state energy.
 
         Return:
             tuple, the ground state energy and the ground state(in <MPS> form).
@@ -231,10 +245,10 @@ class DMRGEngine(object):
 
         nsite=self.hgen.nsite
         if endpoint is None: endpoint=(4,'<-',0)
-        maxscan,end_direction,end_site=endpoint
+        maxsweep,end_direction,end_site=endpoint
         if ndim(maxN)==0:
-            maxN=[maxN]*maxscan
-        assert(len(maxN)>=maxscan and end_site<=(nsite-2 if not self.reflect else nsite/2-2))
+            maxN=[maxN]*maxsweep
+        assert(len(maxN)>=maxsweep and end_site<=(nsite-2 if not self.reflect else nsite/2-2))
         EG_PRE=Inf
         initial_state=None
         if self.reflect:
@@ -244,11 +258,11 @@ class DMRGEngine(object):
         for n,m in enumerate(maxN):
             for direction in ['->','<-']:
                 for i in iterators[direction]:
-                    print 'Running %s-th scan, iteration %s'%(n+1,i)
+                    print 'Running %s-th sweep, iteration %s'%(n+1,i)
                     t0=time.time()
                     #setup generators and operators.
                     #The cases to use identical hamiltonian generator,
-                    #1. the first half of first scan.
+                    #1. the first half of first sweep.
                     #2. the reflection is used and left block is same length with right block.
                     hgen_l=self.query('l',i)
                     if (n==0 and direction=='->' and i<(nsite+1)/2) or (self.reflect and i==(nsite/2-1) and nsite%2==0):
@@ -257,15 +271,15 @@ class DMRGEngine(object):
                         hgen_r=self.query('r',nsite-i-2)
                     print 'A'*hgen_l.N+'..'+'B'*hgen_r.N
                     nsite_true=hgen_l.N+hgen_r.N+2
+                    self.status.update({'nsweep':n,'pos':i+1,'direction':direction,'hgen_l':hgen_l,'hgen_r':hgen_r})
 
                     #run a step
                     if n<=2:
                         e_estimate=None
                     else:
                         e_estimate=EG[0]
-                    EG,err,phil=self.dmrg_step(hgen_l,hgen_r,direction=direction,tol=tol,maxN=m,
-                            target_block=target_block,initial_state=initial_state,
-                            e_estimate=e_estimate,nlevel=nlevel)
+                    EG,err,phil=self.dmrg_step(hgen_l,hgen_r,tol=tol,maxN=m,
+                            initial_state=initial_state,e_estimate=e_estimate,nlevel=nlevel)
                     #update LPART and RPART
                     print 'setting %s-site of left and %s-site of right.'%(hgen_l.N,hgen_r.N)
                     self.set('l',hgen_l,hgen_l.N)
@@ -298,24 +312,23 @@ class DMRGEngine(object):
                             initial_state=sum([self.state_prediction(phi,l=i+1,direction=direction) for phi in phil],axis=0)
                             initial_state=initial_state.ravel()
 
-                    EG=EG #/nsite_true
                     if len(EL)>0:
                         diff=EG-EL[-1]
                     else:
                         diff=Inf
                     t1=time.time()
-                    print 'EG = %s, dE = %s, Elapse -> %.4f, TruncError -> %s'%(EG,diff,t1-t0,err)
+                    print 'EG = %s, dE = %s, Elapse -> %.2f, TruncError -> %s'%(EG,diff,t1-t0,err)
                     EL.append(EG)
                     if i==end_site and direction==end_direction:
                         diff=EG-EG_PRE
                         print 'MidPoint -> EG = %s, dE = %s'%(EG,diff)
-                        if n==maxscan-1:
-                            print 'Breaking due to maximum scan reached!'
+                        if n==maxsweep-1:
+                            print 'Breaking due to maximum sweep reached!'
                             return EG,self.get_mps(phi=phil[0],l=i+1,direction=direction)
                         else:
                             EG_PRE=EG
 
-    def run_infinite(self,maxiter=50,tol=0,maxN=20,nlevel=1,target_block=None):
+    def run_infinite(self,maxiter=50,tol=0,maxN=20,nlevel=1):
         '''
         Run the application.
 
@@ -323,7 +336,6 @@ class DMRGEngine(object):
             :maxiter: int, the maximum iteration times.
             :tol: float, the rolerence of energy.
             :maxN: int/list, maximum number of kept states and the tolerence for truncation weight.
-            :target_block: function/tuple/int, the target block(or generator as a function of nsite) to evaluate the ground state energy.
 
         Return:
             tuple of EG,MPS.
@@ -345,30 +357,26 @@ class DMRGEngine(object):
         for i in xrange(maxiter):
             print 'Running iteration %s'%i
             t0=time.time()
-            EG,err,phil=self.dmrg_step(hgen,hgen,tol=tol,target_block=target_block,nlevel=nlevel)
+            EG,err,phil=self.dmrg_step(hgen,hgen,tol=tol,nlevel=nlevel)
             EG=EG/(2.*(i+1))
             if len(EL)>0:
                 diff=EG-EL[-1]
             else:
                 diff=Inf
             t1=time.time()
-            print 'EG = %.5f, dE = %.2e, Elapse -> %.4f(D=%s), TruncError -> %.2e'%(EG,diff,t1-t0,hgen.ndim,err)
+            print 'EG = %.5f, dE = %.2e, Elapse -> %.2f(D=%s), TruncError -> %.2e'%(EG,diff,t1-t0,hgen.ndim,err)
             EL.append(EG)
             if abs(diff)<tol:
                 print 'Breaking!'
                 break
         return EG,self.get_mps(phi=phil[0],l=i+1,direction=direction)
 
-    def dmrg_step(self,hgen_l,hgen_r,direction='->',tol=0,maxN=20,target_block=None,e_estimate=None,nlevel=1,initial_state=None):
+    def dmrg_step(self,hgen_l,hgen_r,tol=0,maxN=20,e_estimate=None,nlevel=1,initial_state=None):
         '''
         Run a single step of DMRG iteration.
 
         Parameters:
             :hgen_l,hgen_r: <RGHGen>, the hamiltonian generator for left and right blocks.
-            :direction: str,
-
-                * '->', right scan.
-                * '<-', left scan.
             :tol: float, the rolerence.
             :maxN: int, maximum number of kept states and the tolerence for truncation weight.
             :initial_state: 1D array/None, the initial state(prediction), None for random.
@@ -376,7 +384,9 @@ class DMRGEngine(object):
         Return:
             tuple of (ground state energy(float), unitary matrix(2D array), kpmask(1D array of bool), truncation error(float))
         '''
-        assert(direction=='->' or direction=='<-')
+        direction=self.status['direction']
+        target_block=self.target_block
+
         t0=time.time()
         intraop_l,intraop_r,interop=[],[],[]
         hndim=hgen_l.hndim
@@ -446,8 +456,6 @@ class DMRGEngine(object):
             bm_tot=None
             v0=v00/norm(v00)
         else:
-            if hasattr(target_block,'__call__'):
-                target_block=target_block(nsite=hgen_l.N+hgen_r.N)
             bm_tot=self.bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
             Hc=bm_tot.lextract_block_pre(H,(target_block,target_block))
             v0=bm_tot.lextract_block_pre(v00,(target_block,))
@@ -479,18 +487,18 @@ class DMRGEngine(object):
             v[abs(v)<ZERO_REF]=0
         #spec1,U1,kpmask1,trunc_error=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='l',maxN=maxN)
         U1,specs,U2,(kpmask1,kpmask2),trunc_error=self.svd_analysis(phis=vl,bml=HL0.shape[0] if bml is None else bml,\
-                bmr=HR0.shape[0] if bmr is None else bmr,maxN=maxN,target_block=target_block)
+                bmr=HR0.shape[0] if bmr is None else bmr,maxN=maxN)
         print '%s states kept.'%sum(kpmask1)
         hgen_l.trunc(U=U1,block_marker=bml,kpmask=kpmask1)  #kpmask is also important for setting up the sign
         if hgen_l is not hgen_r:
             #spec2,U2,kpmask2,trunc_error=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='r',maxN=maxN)
             hgen_r.trunc(U=U2,block_marker=bmr,kpmask=kpmask2)
         t3=time.time()
-        print 'Elapse -> prepair:%s(intra %.2f,inter %.2f,blockize %.2f), eigen:%s, trunc: %s'%(t1-t0,t10-t0,t11-t10,t1-t11,t2-t1,t3-t2)
+        print 'Elapse -> prepair:%.2f(intra %.2f,inter %.2f,blockize %.2f), eigen:%.2f, trunc: %.2f'%(t1-t0,t10-t0,t11-t10,t1-t11,t2-t1,t3-t2)
         phil=[phi.reshape([ndiml/hndim,hndim,ndimr/hndim,hndim]) for phi in vl]
         return e,trunc_error,phil
 
-    def svd_analysis(self,phis,bml,bmr,maxN,target_block):
+    def svd_analysis(self,phis,bml,bmr,maxN):
         '''
         The direct analysis of state(svd).
         
@@ -498,7 +506,6 @@ class DMRGEngine(object):
             :phis: list of 1D array, the kept eigen states of current iteration.
             :bml/bmr: <BlockMarker>/int, the block marker for left and right blocks/or the dimensions.
             :maxN: int, the maximum kept values.
-            :target_block: tuple/int, the block label of the state.
 
         Return:
             tuple of (spec, U), the spectrum and Unitary matrix from the density matrix.
@@ -515,7 +522,7 @@ class DMRGEngine(object):
             phi=bml.blockize(phi,axes=(0,))
             phi=bmr.blockize(phi,axes=(1,))
             def mapping_rule(bli):
-                res=self.bmg.labels_sub([target_block],[bli])[0]
+                res=self.bmg.labels_sub([self.target_block],[bli])[0]
                 try:
                     return res.item()
                 except:

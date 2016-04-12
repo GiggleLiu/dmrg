@@ -37,7 +37,7 @@ class VMPSEngine(object):
         bra=self.bra
         self.contractor_L=BHKContraction(bra,self.H,self.ket,l=0)
         self.contractor_R=BHKContraction(bra,self.H,self.ket,l=nsite)
-        #first, left scan to construct R.
+        #first, left sweep to construct R.
         self.contractor_R<<self.nsite
         #self.contractor_L>>self.nsite
         #ion()
@@ -135,7 +135,7 @@ class VMPSEngine(object):
         Run this application.
 
         maxiter:
-            The maximum scanning iteration, one iteration is contains one left scan, and one right scan through the chain.
+            The maximum sweep iteration, one iteration is contains one left sweep, and one right sweep through the chain.
         tol:
             The tolerence.
         '''
