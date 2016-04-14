@@ -19,7 +19,7 @@ from disc_symm import SymmetryHandler
 from superblock import SuperBlock,site_image
 from pydavidson import JDh
 
-__all__=['site_image','SuperBlock','DMRGEngine']
+__all__=['site_image','SuperBlock','DMRGEngine','fix_tail']
 
 ZERO_REF=1e-10
 
@@ -740,4 +740,19 @@ class DMRGEngine(object):
         BL=[chorder(bi,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for bi in BL]   #transpose
         mps=MPS(AL=AL,BL=BL,S=S,labels=labels)
         return mps
+
+def fix_tail(mps,spaceconfig,parity):
+    '''Fix the ordering to normal order(reverse).'''
+    if parity==1: return mps
+    n1=(1-Z4scfg(spaceconfig).diagonal())/2
+    site_axis=mps.site_axis
+    if len(mps.AL)==1:
+        mps.AL[0]=mps.AL[0]*(1-2*(n1%2))[tuple([slice(None)]+[newaxis]*(2-site_axis))]
+    elif len(mps.BL)==1:
+        return mps
+        mps.BL[0]=mps.BL[0]*(1-2*(n1%2))[tuple([slice(None)]+[newaxis]*(2-site_axis))]
+    else:
+        pdb.set_trace()
+    return mps
+
 
