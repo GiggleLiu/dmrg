@@ -29,6 +29,44 @@ def _eliminate_zeros(A,zero_ref):
     A.data[abs(A.data)<zero_ref]=0; A.eliminate_zeros()
     return A
 
+def _get_mps(hgen_l,hgen_r,phi,direction,labels):
+    '''Combining hgen_l and hgen_r to get the matrix product state.'''
+    NL,NR=hgen_l.N,hgen_r.N
+    phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
+    if direction=='->':
+        A=hgen_l.evolutor.A(NL-1,dense=True)   #get A[sNL](NL-1,NL)
+        A=tensor.Tensor(A,labels=['sl+1','al','al+1\''])
+        phi=tensor.contract([A,phi])
+        phi=phi.chorder([0,2,1])   #now we get phi(al+1,sl+2,al+2)
+        #decouple phi into S*B, B is column-wise othorgonal
+        U,S,V=svd(phi.reshape([phi.shape[0],-1]),full_matrices=False)
+        U=tensor.Tensor(U,labels=['al+1\'','al+1'])
+        A=(A*U)  #get A(al,sl+1,al+1)
+        B=transpose(V.reshape([S.shape[0],phi.shape[1],phi.shape[2]]),axes=(1,2,0))   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, stored in column wise othorgonal format
+    else:
+        B=hgen_r.evolutor.A(NR-1,dense=True)   #get B[sNR](NL+1,NL+2)
+        B=tensor.Tensor(B,labels=['sl+2','al+2','al+1\'']).conj()    #!the conjugate?
+        phi=tensor.contract([phi,B])
+        #decouple phi into A*S, A is row-wise othorgonal
+        U,S,V=svd(phi.reshape([phi.shape[0]*phi.shape[1],-1]),full_matrices=False)
+        V=tensor.Tensor(V,labels=['al+1','al+1\''])
+        B=(V*B).chorder([1,2,0]).conj()   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, for B is in transposed order by default.
+        A=transpose(U.reshape([phi.shape[0],phi.shape[1],S.shape[0]]),axes=(1,0,2))   #al,sl+1,al+1 -> sl+1,al,al+1, stored in column wise othorgonal format
+
+    #if hasattr(hgen_r,'zstring'):  #cope with the sign problem in the l=1 case, in the left <- right labeling order. 
+    #    n1=(1-Z4scfg(hgen_l.spaceconfig).diagonal())/2
+    #    A=A*(1-2*(n1[:,newaxis,newaxis]%2))
+    #    print A.shape
+    #    pdb.set_trace()
+
+    AL=hgen_l.evolutor.get_AL(dense=True)[:-1]+[A]
+    BL=[B]+hgen_r.evolutor.get_AL(dense=True)[::-1][1:]
+
+    AL=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]) for ai in AL]
+    BL=[chorder(bi,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for bi in BL]   #transpose
+    mps=MPS(AL=AL,BL=BL,S=S,labels=labels)
+    return mps
+
 class DMRGEngine(object):
     '''
     DMRG Engine.
@@ -373,7 +411,7 @@ class DMRGEngine(object):
             if abs(diff)<tol:
                 print 'Breaking!'
                 break
-        return EG,self.get_mps(phi=phil[0],l=i+1,direction=direction)
+        return EG,_get_mps(hgen,hgen,phi=phil[0],direction='->',labels=['s','a'])
 
     def dmrg_step(self,hgen_l,hgen_r,tol=0,maxN=20,e_estimate=None,nlevel=1,initial_state=None):
         '''
@@ -702,44 +740,10 @@ class DMRGEngine(object):
         '''
         #get the direction
         assert(direction=='<-' or direction=='->')
-
         nsite=self.hgen.nsite
-        phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
         NL,NR=l,nsite-l
         hgen_l,hgen_r=self.query('l',NL),self.query('r',NR)
-        if direction=='->':
-            A=hgen_l.evolutor.A(NL-1,dense=True)   #get A[sNL](NL-1,NL)
-            A=tensor.Tensor(A,labels=['sl+1','al','al+1\''])
-            phi=tensor.contract([A,phi])
-            phi=phi.chorder([0,2,1])   #now we get phi(al+1,sl+2,al+2)
-            #decouple phi into S*B, B is column-wise othorgonal
-            U,S,V=svd(phi.reshape([phi.shape[0],-1]),full_matrices=False)
-            U=tensor.Tensor(U,labels=['al+1\'','al+1'])
-            A=(A*U)  #get A(al,sl+1,al+1)
-            B=transpose(V.reshape([S.shape[0],phi.shape[1],phi.shape[2]]),axes=(1,2,0))   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, stored in column wise othorgonal format
-        else:
-            B=hgen_r.evolutor.A(NR-1,dense=True)   #get B[sNR](NL+1,NL+2)
-            B=tensor.Tensor(B,labels=['sl+2','al+2','al+1\'']).conj()    #!the conjugate?
-            phi=tensor.contract([phi,B])
-            #decouple phi into A*S, A is row-wise othorgonal
-            U,S,V=svd(phi.reshape([phi.shape[0]*phi.shape[1],-1]),full_matrices=False)
-            V=tensor.Tensor(V,labels=['al+1','al+1\''])
-            B=(V*B).chorder([1,2,0]).conj()   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, for B is in transposed order by default.
-            A=transpose(U.reshape([phi.shape[0],phi.shape[1],S.shape[0]]),axes=(1,0,2))   #al,sl+1,al+1 -> sl+1,al,al+1, stored in column wise othorgonal format
-
-        #if hasattr(hgen_r,'zstring'):  #cope with the sign problem in the l=1 case, in the left <- right labeling order. 
-        #    n1=(1-Z4scfg(hgen_l.spaceconfig).diagonal())/2
-        #    A=A*(1-2*(n1[:,newaxis,newaxis]%2))
-        #    print A.shape
-        #    pdb.set_trace()
-
-        AL=hgen_l.evolutor.get_AL(dense=True)[:-1]+[A]
-        BL=[B]+hgen_r.evolutor.get_AL(dense=True)[::-1][1:]
-
-        AL=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]) for ai in AL]
-        BL=[chorder(bi,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for bi in BL]   #transpose
-        mps=MPS(AL=AL,BL=BL,S=S,labels=labels)
-        return mps
+        return _get_mps(hgen_l,hgen_r,phi,direction,labels)
 
 def fix_tail(mps,spaceconfig,parity):
     '''Fix the ordering to normal order(reverse).'''
