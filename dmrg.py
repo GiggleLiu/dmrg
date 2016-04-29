@@ -29,6 +29,35 @@ def _eliminate_zeros(A,zero_ref):
     A.data[abs(A.data)<zero_ref]=0; A.eliminate_zeros()
     return A
 
+def _gen_hamiltonian_full(HL0,HR0,hgen_l,hgen_r,interop):
+    '''Get the full hamiltonian.'''
+    H1,H2=kron(HL0,sps.identity(ndimr)),kron(sps.identity(ndiml),HR0)
+    H=H1+H2
+    #get the link hamiltonians
+    sb=SuperBlock(hgen_l,hgen_r)
+    Hin=[]
+    for op in interop:
+        Hin.append(sb.get_op(op))
+    H=H+sum(Hin)
+    H=_eliminate_zeros(H,ZERO_REF)
+    return H
+
+def _gen_hamiltonian_block(HL0,HR0,hgen_l,hgen_r,bml,bmr,bmg,target_block,interop):
+    '''Get the combined hamiltonian for specific block.'''
+    H1,H2=kron(HL0,sps.identity(ndimr)),kron(sps.identity(ndiml),HR0)
+    bm_tot=bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
+    H1=bm_tot.lextract_block_pre(H1,(target_block,target_block))
+    H2=bm_tot.lextract_block_pre(H2,(target_block,target_block))
+    Hc=H1+H2
+    sb=SuperBlock(hgen_l,hgen_r)
+    for op in interop:
+        Hc=Hc+bm_tot.lextract_block_pre(sb.get_op(op),(target_block,target_block))
+    #kpmask=zeros(bm_tot.N,dtype='bool')
+    #bm_tot.lextract_block(kpmask,target_block)=True
+    #pm=bm_tot.pm[kpmask]
+    #rblock=target_block-bml.blockmarker
+    return Hc
+
 class DMRGEngine(object):
     '''
     DMRG Engine.
@@ -424,15 +453,10 @@ class DMRGEngine(object):
             bmr=None #get_blockmarker(HR0)
         t10=time.time()
 
-        H1,H2=kron(HL0,sps.identity(ndimr)),kron(sps.identity(ndiml),HR0)
-        H=H1+H2
-        #get the link hamiltonians
-        sb=SuperBlock(hgen_l,hgen_r)
-        Hin=[]
-        for op in interop:
-            Hin.append(sb.get_op(op))
-        H=H+sum(Hin)
-        H=_eliminate_zeros(H,ZERO_REF)
+        if target_block is None:
+            Hc,bm_tot=_gen_hamiltonian_full(HL0,HR0,hgen_l,hgen_r,interop=interop),None
+        else:
+            Hc,bm_tot=_gen_hamiltonian_block(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,bml=bml,bmr=bmr,bmg=self.bmg,target_block=target_block,interop=interop)
         t11=time.time()
 
         #get the starting eigen state v00!
@@ -453,15 +477,11 @@ class DMRGEngine(object):
             v00=initial_state
 
         #perform diagonalization
-        ##1. detect specific block for diagonalization, get Hc, v0 and projector
+        ##1. detect specific block for diagonalization, get v0 and projector
         projector=self.symm_handler.get_projector() if len(self.symm_handler.symms)!=0 else None
         if self.bmg is None or target_block is None:
-            Hc=H
-            bm_tot=None
             v0=v00/norm(v00)
         else:
-            bm_tot=self.bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
-            Hc=bm_tot.lextract_block_pre(H,(target_block,target_block))
             v0=bm_tot.lextract_block_pre(v00,(target_block,))
             if projector is not None:
                 projector=bm_tot.lextract_block_pre(projector,(target_block,target_block))
