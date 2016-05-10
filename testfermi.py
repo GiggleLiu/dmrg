@@ -99,7 +99,7 @@ class TestFH(object):
         dmrgegn.use_U1_symmetry('QM',target_block=(0,0))
         for c in [-1,1]:
             dmrgegn.use_disc_symmetry(target_sector={'C':c},detect_scope=4)
-            EG2,EV2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[20,40,50,70,70],tol=0)
+            EG2,EV2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[20,40,60,100,100],tol=0)
             print 'Get gound state energy for C2 -> %s: %s.'%(c,EG2)
         #the result is -36.1372 for C=-1, and -36.3414 for C=1
         pdb.set_trace()
@@ -136,7 +136,7 @@ class TestFH(object):
         expander3=RGHGen(spaceconfig=spaceconfig,H=H_serial,evolutor_type='masked',use_zstring=True)
         dmrgegn=DMRGEngine(hgen=expander3,tol=0,reflect=False)
         dmrgegn.use_U1_symmetry('QM',target_block=(0,0))
-        EG2,Vmin2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0)
+        EG2,Vmin2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,30,60,100,100],tol=0)
         Vmin2=fix_tail(Vmin2,expander3.spaceconfig,0)
         #check for states.
         assert_almost_equal(Emin_exact,EG2,decimal=4)
