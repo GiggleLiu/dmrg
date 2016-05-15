@@ -99,7 +99,7 @@ class TestFH(object):
         dmrgegn.use_U1_symmetry('QM',target_block=(0,0))
         for c in [-1,1]:
             dmrgegn.use_disc_symmetry(target_sector={'C':c},detect_scope=4)
-            EG2,EV2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[20,40,60,100,100],tol=0)
+            EG2,EV2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[20,40,100,100,100],tol=0)
             print 'Get gound state energy for C2 -> %s: %s.'%(c,EG2)
         #the result is -36.1372 for C=-1, and -36.3414 for C=1
         pdb.set_trace()
@@ -153,8 +153,8 @@ class TestFH(object):
         print H2
 
     def test_all(self):
-        self.test_nonint()
         self.test_disc_symm(20)
+        self.test_nonint()
         self.test_site_image()
 
 

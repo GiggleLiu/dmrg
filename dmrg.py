@@ -16,7 +16,7 @@ from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
 from rglib.hexpand import signlib
 from blockmatrix import get_bmgen
 from disc_symm import SymmetryHandler
-from superblock import SuperBlock,site_image
+from superblock import SuperBlock,site_image,joint_extract_block
 from pydavidson import JDh
 
 __all__=['site_image','SuperBlock','DMRGEngine','fix_tail']
@@ -43,26 +43,40 @@ def _gen_hamiltonian_full(HL0,HR0,hgen_l,hgen_r,interop):
     H=_eliminate_zeros(H,ZERO_REF)
     return H
 
-def _gen_hamiltonian_block(HL0,HR0,hgen_l,hgen_r,bml,bmr,bmg,target_block,interop):
+def _gen_hamiltonian_block0(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
     '''Get the combined hamiltonian for specific block.'''
     ndiml,ndimr=HL0.shape[0],HR0.shape[0]
+    bml,bmr,bmg,target_block=blockinfo['bml'],blockinfo['bmr'],blockinfo['bmg'],blockinfo['target_block']
+    bm_tot=bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
     t0=time.time()
     H1,H2=kron(HL0,sps.identity(ndimr)),kron(sps.identity(ndiml),HR0)
     t1=time.time()
-    bm_tot=bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
-    t2=time.time()
     H1=bm_tot.lextract_block_pre(H1,(target_block,target_block))
     H2=bm_tot.lextract_block_pre(H2,(target_block,target_block))
     Hc=H1+H2
     sb=SuperBlock(hgen_l,hgen_r)
     for op in interop:
         Hc=Hc+bm_tot.lextract_block_pre(sb.get_op(op),(target_block,target_block))
-    t3=time.time()
-    #kpmask=zeros(bm_tot.N,dtype='bool')
-    #bm_tot.lextract_block(kpmask,target_block)=True
-    #pm=bm_tot.pm[kpmask]
-    #rblock=target_block-bml.blockmarker
-    print '@@@ %s - %s -%s'%(t1-t0,t2-t1,t3-t2)
+    t2=time.time()
+    print 'Generate Hamiltonian %s, %s'%(t1-t0,t2-t1)
+    return Hc,bm_tot
+
+def _gen_hamiltonian_block(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
+    '''Get the combined hamiltonian for specific block.'''
+    ndiml,ndimr=HL0.shape[0],HR0.shape[0]
+    bm_tot=blockinfo['bmg'].add(blockinfo['bml'],blockinfo['bmr'],nsite=hgen_l.N+hgen_r.N)
+    t0=time.time()
+    H1=joint_extract_block(HL0,sps.identity(ndimr),lshift=0,**blockinfo)
+    H2=joint_extract_block(sps.identity(ndiml),HR0,lshift=0,pre=True,**blockinfo)
+    Hc=H1+H2
+    t1=time.time()
+    sb=SuperBlock(hgen_l,hgen_r)
+    for op in interop:
+        Hc=Hc+sb.get_op(op,blockinfo=blockinfo)
+    #print Hc.toarray()-Hc.toarray().conj().T
+    #print eigh(Hc.toarray())
+    t2=time.time()
+    print 'Generate Hamiltonian %s, %s'%(t1-t0,t2-t1)
     return Hc,bm_tot
 
 def _get_mps(hgen_l,hgen_r,phi,direction,labels):
@@ -499,7 +513,12 @@ class DMRGEngine(object):
         if target_block is None:
             Hc,bm_tot=_gen_hamiltonian_full(HL0,HR0,hgen_l,hgen_r,interop=interop),None
         else:
-            Hc,bm_tot=_gen_hamiltonian_block(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,bml=bml,bmr=bmr,bmg=self.bmg,target_block=target_block,interop=interop)
+            if NL<=30:
+                Hc,bm_tot=_gen_hamiltonian_block0(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,\
+                        blockinfo=dict(bml=bml,bmr=bmr,bmg=self.bmg,target_block=target_block),interop=interop)
+            else:
+                Hc,bm_tot=_gen_hamiltonian_block(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,\
+                        blockinfo=dict(bml=bml,bmr=bmr,bmg=self.bmg,target_block=target_block),interop=interop)
 
         #get the starting eigen state v00!
         if initial_state is None:
