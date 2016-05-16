@@ -16,7 +16,7 @@ from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
 from rglib.hexpand import signlib
 from blockmatrix import get_bmgen
 from disc_symm import SymmetryHandler
-from superblock import SuperBlock,site_image
+from superblock import SuperBlock,site_image,joint_extract_block
 from pydavidson import JDh
 
 __all__=['site_image','SuperBlock','DMRGEngine','fix_tail']
@@ -28,6 +28,94 @@ def _eliminate_zeros(A,zero_ref):
     if not isinstance(A,sps.csr_matrix): A=A.tocsr()
     A.data[abs(A.data)<zero_ref]=0; A.eliminate_zeros()
     return A
+
+def _gen_hamiltonian_full(HL0,HR0,hgen_l,hgen_r,interop):
+    '''Get the full hamiltonian.'''
+    ndiml,ndimr=HL0.shape[0],HR0.shape[0]
+    H1,H2=kron(HL0,sps.identity(ndimr)),kron(sps.identity(ndiml),HR0)
+    H=H1+H2
+    #get the link hamiltonians
+    sb=SuperBlock(hgen_l,hgen_r)
+    Hin=[]
+    for op in interop:
+        Hin.append(sb.get_op(op))
+    H=H+sum(Hin)
+    H=_eliminate_zeros(H,ZERO_REF)
+    return H
+
+def _gen_hamiltonian_block0(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
+    '''Get the combined hamiltonian for specific block.'''
+    ndiml,ndimr=HL0.shape[0],HR0.shape[0]
+    bml,bmr,bmg,target_block=blockinfo['bml'],blockinfo['bmr'],blockinfo['bmg'],blockinfo['target_block']
+    bm_tot=bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
+    t0=time.time()
+    H1,H2=kron(HL0,sps.identity(ndimr)),kron(sps.identity(ndiml),HR0)
+    t1=time.time()
+    H1=bm_tot.lextract_block_pre(H1,(target_block,target_block))
+    H2=bm_tot.lextract_block_pre(H2,(target_block,target_block))
+    Hc=H1+H2
+    sb=SuperBlock(hgen_l,hgen_r)
+    for op in interop:
+        Hc=Hc+bm_tot.lextract_block_pre(sb.get_op(op),(target_block,target_block))
+    t2=time.time()
+    print 'Generate Hamiltonian %s, %s'%(t1-t0,t2-t1)
+    return Hc,bm_tot
+
+def _gen_hamiltonian_block(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
+    '''Get the combined hamiltonian for specific block.'''
+    ndiml,ndimr=HL0.shape[0],HR0.shape[0]
+    bm_tot=blockinfo['bmg'].add(blockinfo['bml'],blockinfo['bmr'],nsite=hgen_l.N+hgen_r.N)
+    t0=time.time()
+    H1=joint_extract_block(HL0,sps.identity(ndimr),lshift=0,**blockinfo)
+    H2=joint_extract_block(sps.identity(ndiml),HR0,lshift=0,pre=True,**blockinfo)
+    Hc=H1+H2
+    t1=time.time()
+    sb=SuperBlock(hgen_l,hgen_r)
+    for op in interop:
+        Hc=Hc+sb.get_op(op,blockinfo=blockinfo)
+    #print Hc.toarray()-Hc.toarray().conj().T
+    #print eigh(Hc.toarray())
+    t2=time.time()
+    print 'Generate Hamiltonian %s, %s'%(t1-t0,t2-t1)
+    return Hc,bm_tot
+
+def _get_mps(hgen_l,hgen_r,phi,direction,labels):
+    '''Combining hgen_l and hgen_r to get the matrix product state.'''
+    NL,NR=hgen_l.N,hgen_r.N
+    phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
+    if direction=='->':
+        A=hgen_l.evolutor.A(NL-1,dense=True)   #get A[sNL](NL-1,NL)
+        A=tensor.Tensor(A,labels=['sl+1','al','al+1\''])
+        phi=tensor.contract([A,phi])
+        phi=phi.chorder([0,2,1])   #now we get phi(al+1,sl+2,al+2)
+        #decouple phi into S*B, B is column-wise othorgonal
+        U,S,V=svd(phi.reshape([phi.shape[0],-1]),full_matrices=False)
+        U=tensor.Tensor(U,labels=['al+1\'','al+1'])
+        A=(A*U)  #get A(al,sl+1,al+1)
+        B=transpose(V.reshape([S.shape[0],phi.shape[1],phi.shape[2]]),axes=(1,2,0))   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, stored in column wise othorgonal format
+    else:
+        B=hgen_r.evolutor.A(NR-1,dense=True)   #get B[sNR](NL+1,NL+2)
+        B=tensor.Tensor(B,labels=['sl+2','al+2','al+1\'']).conj()    #!the conjugate?
+        phi=tensor.contract([phi,B])
+        #decouple phi into A*S, A is row-wise othorgonal
+        U,S,V=svd(phi.reshape([phi.shape[0]*phi.shape[1],-1]),full_matrices=False)
+        V=tensor.Tensor(V,labels=['al+1','al+1\''])
+        B=(V*B).chorder([1,2,0]).conj()   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, for B is in transposed order by default.
+        A=transpose(U.reshape([phi.shape[0],phi.shape[1],S.shape[0]]),axes=(1,0,2))   #al,sl+1,al+1 -> sl+1,al,al+1, stored in column wise othorgonal format
+
+    #if hasattr(hgen_r,'zstring'):  #cope with the sign problem in the l=1 case, in the left <- right labeling order. 
+    #    n1=(1-Z4scfg(hgen_l.spaceconfig).diagonal())/2
+    #    A=A*(1-2*(n1[:,newaxis,newaxis]%2))
+    #    print A.shape
+    #    pdb.set_trace()
+
+    AL=hgen_l.evolutor.get_AL(dense=True)[:-1]+[A]
+    BL=[B]+hgen_r.evolutor.get_AL(dense=True)[::-1][1:]
+
+    AL=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]) for ai in AL]
+    BL=[chorder(bi,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for bi in BL]   #transpose
+    mps=MPS(AL=AL,BL=BL,S=S,labels=labels)
+    return mps
 
 class DMRGEngine(object):
     '''
@@ -68,7 +156,7 @@ class DMRGEngine(object):
         #status
         self.status={'isweep':0,'direction':'->','pos':0}
 
-    def _eigsh(self,H,v0,projector=None,tol=1e-12,sigma=None,lc_search_space=1,k=1):
+    def _eigsh(self,H,v0,projector=None,tol=1e-11,sigma=None,lc_search_space=1,k=1):
         '''
         solve eigenvalue problem.
         '''
@@ -374,7 +462,7 @@ class DMRGEngine(object):
             if abs(diff)<tol:
                 print 'Breaking!'
                 break
-        return EG,self.get_mps(phi=phil[0],l=i+1,direction=direction)
+        return EG,_get_mps(hgen,hgen,phi=phil[0],direction='->',labels=['s','a'])
 
     def dmrg_step(self,hgen_l,hgen_r,tol=0,maxN=20,e_estimate=None,nlevel=1,initial_state=None):
         '''
@@ -395,9 +483,8 @@ class DMRGEngine(object):
         t0=time.time()
         intraop_l,intraop_r,interop=[],[],[]
         hndim=hgen_l.hndim
-        NL,NR=hgen_l.N,hgen_r.N
         ndiml0,ndimr0=hgen_l.ndim,hgen_r.ndim
-        ndiml,ndimr=ndiml0*hndim,ndimr0*hndim
+        NL,NR=hgen_l.N,hgen_r.N
         #filter operators to extract left-only and right-only blocks.
         interop=filter(lambda op:isinstance(op,OpString) and (NL+1 in op.siteindex),hgen_l.hchain.query(NL))  #site NL and NL+1
         OPL=hgen_l.expand1()
@@ -423,22 +510,20 @@ class DMRGEngine(object):
         else:
             bml=None #get_blockmarker(HL0)
             bmr=None #get_blockmarker(HR0)
-        t10=time.time()
 
-        H1,H2=kron(HL0,sps.identity(ndimr)),kron(sps.identity(ndiml),HR0)
-        H=H1+H2
-        #get the link hamiltonians
-        sb=SuperBlock(hgen_l,hgen_r)
-        Hin=[]
-        for op in interop:
-            Hin.append(sb.get_op(op))
-        H=H+sum(Hin)
-        H=_eliminate_zeros(H,ZERO_REF)
-        t11=time.time()
+        if target_block is None:
+            Hc,bm_tot=_gen_hamiltonian_full(HL0,HR0,hgen_l,hgen_r,interop=interop),None
+        else:
+            if NL<=30:
+                Hc,bm_tot=_gen_hamiltonian_block0(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,\
+                        blockinfo=dict(bml=bml,bmr=bmr,bmg=self.bmg,target_block=target_block),interop=interop)
+            else:
+                Hc,bm_tot=_gen_hamiltonian_block(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,\
+                        blockinfo=dict(bml=bml,bmr=bmr,bmg=self.bmg,target_block=target_block),interop=interop)
 
         #get the starting eigen state v00!
         if initial_state is None:
-            initial_state=random.random(H.shape[0])
+            initial_state=random.random(bm_tot.N)
         if not self.symm_handler==None:
             if hgen_l is not hgen_r:
                 #Note, The cases to disable C2 symmetry,
@@ -454,15 +539,11 @@ class DMRGEngine(object):
             v00=initial_state
 
         #perform diagonalization
-        ##1. detect specific block for diagonalization, get Hc, v0 and projector
+        ##1. detect specific block for diagonalization, get v0 and projector
         projector=self.symm_handler.get_projector() if len(self.symm_handler.symms)!=0 else None
         if self.bmg is None or target_block is None:
-            Hc=H
-            bm_tot=None
             v0=v00/norm(v00)
         else:
-            bm_tot=self.bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
-            Hc=bm_tot.lextract_block_pre(H,(target_block,target_block))
             v0=bm_tot.lextract_block_pre(v00,(target_block,))
             if projector is not None:
                 projector=bm_tot.lextract_block_pre(projector,(target_block,target_block))
@@ -498,9 +579,9 @@ class DMRGEngine(object):
         if hgen_l is not hgen_r:
             #spec2,U2,kpmask2,trunc_error=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='r',maxN=maxN)
             hgen_r.trunc(U=U2,block_marker=bmr,kpmask=kpmask2)
+        phil=[phi.reshape([ndiml0,hndim,ndimr0,hndim]) for phi in vl]
         t3=time.time()
-        print 'Elapse -> prepair:%.2f(intra %.2f,inter %.2f,blockize %.2f), eigen:%.2f, trunc: %.2f'%(t1-t0,t10-t0,t11-t10,t1-t11,t2-t1,t3-t2)
-        phil=[phi.reshape([ndiml/hndim,hndim,ndimr/hndim,hndim]) for phi in vl]
+        print 'Elapse -> prepair:%.2f, eigen:%.2f, trunc: %.2f'%(t1-t0,t2-t1,t3-t2)
         return e,trunc_error,phil
 
     def svd_analysis(self,phis,bml,bmr,maxN):
@@ -703,44 +784,10 @@ class DMRGEngine(object):
         '''
         #get the direction
         assert(direction=='<-' or direction=='->')
-
         nsite=self.hgen.nsite
-        phi=tensor.Tensor(phi,labels=['al','sl+1','al+2','sl+2']) #l=NL-1
         NL,NR=l,nsite-l
         hgen_l,hgen_r=self.query('l',NL),self.query('r',NR)
-        if direction=='->':
-            A=hgen_l.evolutor.A(NL-1,dense=True)   #get A[sNL](NL-1,NL)
-            A=tensor.Tensor(A,labels=['sl+1','al','al+1\''])
-            phi=tensor.contract([A,phi])
-            phi=phi.chorder([0,2,1])   #now we get phi(al+1,sl+2,al+2)
-            #decouple phi into S*B, B is column-wise othorgonal
-            U,S,V=svd(phi.reshape([phi.shape[0],-1]),full_matrices=False)
-            U=tensor.Tensor(U,labels=['al+1\'','al+1'])
-            A=(A*U)  #get A(al,sl+1,al+1)
-            B=transpose(V.reshape([S.shape[0],phi.shape[1],phi.shape[2]]),axes=(1,2,0))   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, stored in column wise othorgonal format
-        else:
-            B=hgen_r.evolutor.A(NR-1,dense=True)   #get B[sNR](NL+1,NL+2)
-            B=tensor.Tensor(B,labels=['sl+2','al+2','al+1\'']).conj()    #!the conjugate?
-            phi=tensor.contract([phi,B])
-            #decouple phi into A*S, A is row-wise othorgonal
-            U,S,V=svd(phi.reshape([phi.shape[0]*phi.shape[1],-1]),full_matrices=False)
-            V=tensor.Tensor(V,labels=['al+1','al+1\''])
-            B=(V*B).chorder([1,2,0]).conj()   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, for B is in transposed order by default.
-            A=transpose(U.reshape([phi.shape[0],phi.shape[1],S.shape[0]]),axes=(1,0,2))   #al,sl+1,al+1 -> sl+1,al,al+1, stored in column wise othorgonal format
-
-        #if hasattr(hgen_r,'zstring'):  #cope with the sign problem in the l=1 case, in the left <- right labeling order. 
-        #    n1=(1-Z4scfg(hgen_l.spaceconfig).diagonal())/2
-        #    A=A*(1-2*(n1[:,newaxis,newaxis]%2))
-        #    print A.shape
-        #    pdb.set_trace()
-
-        AL=hgen_l.evolutor.get_AL(dense=True)[:-1]+[A]
-        BL=[B]+hgen_r.evolutor.get_AL(dense=True)[::-1][1:]
-
-        AL=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]) for ai in AL]
-        BL=[chorder(bi,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for bi in BL]   #transpose
-        mps=MPS(AL=AL,BL=BL,S=S,labels=labels)
-        return mps
+        return _get_mps(hgen_l,hgen_r,phi,direction,labels)
 
 def fix_tail(mps,spaceconfig,parity):
     '''Fix the ordering to normal order(reverse).'''
