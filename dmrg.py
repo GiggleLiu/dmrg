@@ -90,14 +90,15 @@ class DMRGEngine(object):
             e,v=e[order],v[:,order]
         else:
             iprint=0
+            maxiter=500
             if projector is not None:
                 e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,maxiter=maxiter,sigma=sigma,which='SA',iprint=iprint)
             else:
                 if sigma is None:
                     e,v=JDh(H,v0=v0,k=max(lc_search_space,k),projector=projector,tol=tol,maxiter=maxiter,which='SA',iprint=iprint)
                 else:
-                    e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,maxiter=maxiter,sigma=sigma,which='SL',\
-                            iprint=iprint,converge_bound=1e-10)
+                    e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,sigma=sigma,which='SL',\
+                            iprint=iprint,converge_bound=1e-10,maxiter=maxiter)
 
         nstate=len(e)
         if nstate==0:
@@ -474,7 +475,7 @@ class DMRGEngine(object):
             v0=None
         print 'The density of Hamiltonian -> %s'%(1.*len(Hc.data)/Hc.shape[0]**2)
         e,v=self._eigsh(Hc,v0,sigma=e_estimate,projector=projector,
-                lc_search_space=self.symm_handler.detect_scope if detect_C2 else 1,k=nlevel)
+                lc_search_space=self.symm_handler.detect_scope if detect_C2 else 1,k=nlevel,tol=1e-10)
         print 'The goodness of estimate -> %s'%(v0.conj()/norm(v0)).dot(v[:,0])
         t2=time.time()
         ##3. permute back eigen-vectors into original representation al,sl+1,sl+2,al+2
