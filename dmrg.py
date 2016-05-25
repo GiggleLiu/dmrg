@@ -382,7 +382,7 @@ class DMRGEngine(object):
                         #2. when the block has not been expanded to full length and not reflecting.
                         self.set('r',hgen_r,hgen_r.N)
                         print 'set R = %s, size %s'%(hgen_r.N,hgen_r.ndim)
-                    if call_after is not None: call_back(self)
+                    if call_after is not None: call_after(self)
 
                     #do state prediction
                     initial_state=None   #restore initial state.
@@ -514,7 +514,7 @@ class DMRGEngine(object):
         if target_block is None:
             Hc,bm_tot=_gen_hamiltonian_full(HL0,HR0,hgen_l,hgen_r,interop=interop),None
         else:
-            if NL<=30:
+            if True:
                 Hc,bm_tot=_gen_hamiltonian_block0(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,\
                         blockinfo=dict(bml=bml,bmr=bmr,bmg=self.bmg,target_block=target_block),interop=interop)
             else:
