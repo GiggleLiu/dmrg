@@ -60,7 +60,7 @@ def joint_extract_block(HL0,HR0,bml,bmr,bmg,target_block,pre=True,lshift=None):
     for i,(lli,lri) in enumerate(pairs):
         if lshift is not None:
             j,(llj,lrj)=js[i],shifted_pairs[i]
-            if j is None or dims[j]==0:
+            if j is None:
                 continue
 
             lcell=lext(HL0,(_format_label(lli),_format_label(llj)),axes=(0,1))
