@@ -64,7 +64,9 @@ def _gen_hamiltonian_block0(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
 def _gen_hamiltonian_block(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
     '''Get the combined hamiltonian for specific block.'''
     ndiml,ndimr=HL0.shape[0],HR0.shape[0]
-    bm_tot=blockinfo['bmg'].add(blockinfo['bml'],blockinfo['bmr'],nsite=hgen_l.N+hgen_r.N)
+    bm_tot,jointinfo=blockinfo['bmg'].add(blockinfo['bml'],blockinfo['bmr'],nsite=hgen_l.N+hgen_r.N,return_info=True)
+    blockinfo['jointinfo']=jointinfo
+    blockinfo['bm_tot']=bm_tot
     t0=time.time()
     H1=joint_extract_block(HL0,sps.identity(ndimr),lshift=0,**blockinfo)
     H2=joint_extract_block(sps.identity(ndiml),HR0,lshift=0,pre=True,**blockinfo)
@@ -514,7 +516,7 @@ class DMRGEngine(object):
         if target_block is None:
             Hc,bm_tot=_gen_hamiltonian_full(HL0,HR0,hgen_l,hgen_r,interop=interop),None
         else:
-            if True:
+            if maxN<100:    #efficiency cross over
                 Hc,bm_tot=_gen_hamiltonian_block0(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,\
                         blockinfo=dict(bml=bml,bmr=bmr,bmg=self.bmg,target_block=target_block),interop=interop)
             else:
