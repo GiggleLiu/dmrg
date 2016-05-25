@@ -19,9 +19,18 @@ def joint_extract_block(HL0,HR0,bml,bmr,bmg,target_block,pre=True,lshift=None):
 
     Parameters:
     '''
+    def _format_label(lb):
+        rank=ndim(lb)
+        if rank==0:
+            return lb
+        elif rank==1:
+            return tuple(lb)
+        else:
+            raise Exception('Format error for Label %s!'%lb)
+
     ll=array(bml.labels)
     rl=bmg.labels_sub([target_block],ll)
-    dims=bml.nr*array([bmr.blocksize(tuple(ri)) if bmr.has_label(tuple(ri)) else 0 for ri in rl])
+    dims=bml.nr*array([bmr.blocksize(_format_label(ri)) if bmr.has_label(_format_label(ri)) else 0 for ri in rl])
     #filter out zero blocks
     mask=dims>0
     dims=dims[mask]
@@ -54,22 +63,22 @@ def joint_extract_block(HL0,HR0,bml,bmr,bmg,target_block,pre=True,lshift=None):
             if j is None or dims[j]==0:
                 continue
 
-            lcell=lext(HL0,(tuple(lli),tuple(llj)),axes=(0,1))
+            lcell=lext(HL0,(_format_label(lli),_format_label(llj)),axes=(0,1))
             if lcell.nnz!=0:
-                rcell=rext(HR0,(tuple(lri),tuple(lrj)),axes=(0,1))
+                rcell=rext(HR0,(_format_label(lri),_format_label(lrj)),axes=(0,1))
                 if rcell.nnz!=0:
                     if Hc[i,j] is None:
                         Hc[i,j]=kron(lcell,rcell)
                     else:
                         Hc[i,j]=Hc[i,j]+kron(lcell,rcell)
         else:
-            lrow=lext(HL0,(tuple(lli),),axes=(0,)).tocsc()
-            rrow=rext(HR0,(tuple(lri),),axes=(0,)).tocsc()
+            lrow=lext(HL0,(_format_label(lli),),axes=(0,)).tocsc()
+            rrow=rext(HR0,(_format_label(lri),),axes=(0,)).tocsc()
             if lrow.nnz!=0 and rrow.nnz!=0:
                 for j,(llj,lrj) in enumerate(pairs):
-                    lcell=lext(lrow,(tuple(llj),),axes=(1,))
+                    lcell=lext(lrow,(_format_label(llj),),axes=(1,))
                     if lcell.nnz!=0:
-                        rcell=rext(rrow,(tuple(lrj),),axes=(1,))
+                        rcell=rext(rrow,(_format_label(lrj),),axes=(1,))
                         if rcell.nnz!=0:
                             if Hc[i,j] is None:
                                 Hc[i,j]=kron(lcell,rcell)

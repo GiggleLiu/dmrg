@@ -156,7 +156,7 @@ class DMRGEngine(object):
         #status
         self.status={'isweep':0,'direction':'->','pos':0}
 
-    def _eigsh(self,H,v0,projector=None,tol=1e-11,sigma=None,lc_search_space=1,k=1):
+    def _eigsh(self,H,v0,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1):
         '''
         solve eigenvalue problem.
         '''
@@ -557,7 +557,8 @@ class DMRGEngine(object):
         print 'The density of Hamiltonian -> %s'%(1.*len(Hc.data)/Hc.shape[0]**2)
         e,v=self._eigsh(Hc,v0,sigma=e_estimate,projector=projector,
                 lc_search_space=self.symm_handler.detect_scope if detect_C2 else 1,k=nlevel,tol=1e-10)
-        print 'The goodness of estimate -> %s'%(v0.conj()/norm(v0)).dot(v[:,0])
+        if v0 is not None:
+            print 'The goodness of estimate -> %s'%(v0.conj()/norm(v0)).dot(v[:,0])
         t2=time.time()
         ##3. permute back eigen-vectors into original representation al,sl+1,sl+2,al+2
         if bm_tot is not None:
