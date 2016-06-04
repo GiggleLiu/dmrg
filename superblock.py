@@ -13,11 +13,18 @@ from rglib.mps import OpString,OpUnit,OpCollection
 
 __all__=['site_image','joint_extract_block','SuperBlock']
 
-def joint_extract_block(HL0,HR0,bml,bmr,bmg,target_block,pre=True,lshift=None):
+def joint_extract_block(HL0,HR0,bml,bmr,bmg,bm_tot,jointinfo,target_block,pre=True,lshift=None):
     '''
     Extract specific blocks from the combined block.
 
     Parameters:
+        HL0,HR0: matrix,
+        bml,bmr: <BlockMarker>,
+        bmg: <BlockMarkerGenerater>
+        jointinfo: <JointInfo>, with attributes pairs, nnr and pm
+        target_block: tuple/int, the block to extract.
+        pre: bool, True if HL0 is not permuted by bml, so as R.
+        lshift: int/None, the label-shift for left operator.
     '''
     def _format_label(lb):
         rank=ndim(lb)
@@ -28,14 +35,12 @@ def joint_extract_block(HL0,HR0,bml,bmr,bmg,target_block,pre=True,lshift=None):
         else:
             raise Exception('Format error for Label %s!'%lb)
 
-    ll=array(bml.labels)
-    rl=bmg.labels_sub([target_block],ll)
-    dims=bml.nr*array([bmr.blocksize(_format_label(ri)) if bmr.has_label(_format_label(ri)) else 0 for ri in rl])
-    #filter out zero blocks
-    mask=dims>0
-    dims=dims[mask]
-    ll,rl=ll[mask],rl[mask]
-    pairs=zip(ll,rl)
+    jnr=jointinfo.nnr
+    jNr=append([0],cumsum(jnr))
+    ind=bm_tot.labels.index(target_block)
+    pairs=jointinfo.pairs[jNr[ind]:jNr[ind+1]]
+    ll,rl=zip(*pairs)
+    dims=jointinfo.sizes[jNr[ind]:jNr[ind+1]]
     if lshift is 0:
         shifted_pairs=pairs
         js=arange(len(dims))
