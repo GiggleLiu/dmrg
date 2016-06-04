@@ -11,6 +11,7 @@ import scipy.sparse as sps
 import copy,time,pdb,warnings,numbers
 
 from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker,svdb
+from tba.hgen import SpinSpaceConfig
 from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString,tensor,is_commute
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
 from rglib.hexpand import signlib
@@ -265,12 +266,14 @@ class DMRGEngine(object):
         #we insert Zs into operator collections to cope with fermionic sign problem.
         #and use site image to create a reversed ordering!
         hgen_l=copy.deepcopy(self.hgen)
-        hgen_l.evolutees['H'].opc.insert_Zs(spaceconfig=hgen_l.spaceconfig)
+        if not isinstance(hgen_l.spaceconfig,SpinSpaceConfig):
+            hgen_l.evolutees['H'].opc.insert_Zs(spaceconfig=hgen_l.spaceconfig)
         self.LPART={0:hgen_l}
         if not self.reflect:
             hgen_r=copy.deepcopy(self.hgen)
             hgen_r.evolutees['H'].opc=site_image(hgen_r.evolutees['H'].opc,NL=0,NR=hgen_r.nsite,care_sign=True)
-            hgen_r.evolutees['H'].opc.insert_Zs(spaceconfig=hgen_r.spaceconfig)
+            if not isinstance(hgen_l.spaceconfig,SpinSpaceConfig):
+                hgen_r.evolutees['H'].opc.insert_Zs(spaceconfig=hgen_r.spaceconfig)
             self.RPART={0:hgen_r}
 
     def use_disc_symmetry(self,target_sector,detect_scope=2):
@@ -791,7 +794,17 @@ class DMRGEngine(object):
         return _get_mps(hgen_l,hgen_r,phi,direction,labels)
 
 def fix_tail(mps,spaceconfig,parity):
-    '''Fix the ordering to normal order(reverse).'''
+    '''
+    Fix the ordering to normal order(reverse).
+
+    Parameters:
+        :mps: <MPS>, the matrix product state.
+        :spaceconfig: <SpaceConfig>,
+        :parity: int, 1 for odd parity, 0 for even parity.
+
+    Return:
+        <MPS>, the new MPS.
+    '''
     if parity==1: return mps
     n1=(1-Z4scfg(spaceconfig).diagonal())/2
     site_axis=mps.site_axis

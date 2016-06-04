@@ -103,6 +103,9 @@ def site_image(ops,NL,NR,care_sign=False):
     opss=[]
     if isinstance(ops,(OpString,OpUnit)):
         ops=[ops]
+        is_opc=False
+    else:
+        is_opc=True
 
     for opi in ops:
         oprl=[]
@@ -118,7 +121,10 @@ def site_image(ops,NL,NR,care_sign=False):
         if isinstance(opi,OpString):
             opi.compactify(care_sign=care_sign)
         opss.append(opi)
-    return type(ops)(opss)
+    if is_opc:
+        return type(ops)(opss)
+    else:
+        return opss[0]
 
 class SuperBlock(object):
     '''
