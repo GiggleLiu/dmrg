@@ -106,18 +106,12 @@ def _get_mps(hgen_l,hgen_r,phi,direction,labels):
         B=(V*B).chorder([1,2,0]).conj()   #al+1,sl+2,al+2 -> sl+2,al+2,al+1, for B is in transposed order by default.
         A=transpose(U.reshape([phi.shape[0],phi.shape[1],S.shape[0]]),axes=(1,0,2))   #al,sl+1,al+1 -> sl+1,al,al+1, stored in column wise othorgonal format
 
-    #if hasattr(hgen_r,'zstring'):  #cope with the sign problem in the l=1 case, in the left <- right labeling order. 
-    #    n1=(1-Z4scfg(hgen_l.spaceconfig).diagonal())/2
-    #    A=A*(1-2*(n1[:,newaxis,newaxis]%2))
-    #    print A.shape
-    #    pdb.set_trace()
-
     AL=hgen_l.evolutor.get_AL(dense=True)[:-1]+[A]
     BL=[B]+hgen_r.evolutor.get_AL(dense=True)[::-1][1:]
 
     AL=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]) for ai in AL]
     BL=[chorder(bi,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for bi in BL]   #transpose
-    mps=MPS(AL=AL,BL=BL,S=S,labels=labels)
+    mps=MPS(AL=AL,BL=BL,S=S,labels=labels,forder=range(NL)+range(NL,NL+NR)[::-1])
     return mps
 
 class DMRGEngine(object):
@@ -795,7 +789,7 @@ class DMRGEngine(object):
         hgen_l,hgen_r=self.query('l',NL),self.query('r',NR)
         return _get_mps(hgen_l,hgen_r,phi,direction,labels)
 
-def fix_tail(mps,spaceconfig,parity):
+def fix_tail(mps,spaceconfig,parity,head2tail=True):
     '''
     Fix the ordering to normal order(reverse).
 
@@ -803,20 +797,30 @@ def fix_tail(mps,spaceconfig,parity):
         :mps: <MPS>, the matrix product state.
         :spaceconfig: <SpaceConfig>,
         :parity: int, 1 for odd parity, 0 for even parity.
+        :head2tail: bool, move head to tail if True, else move tail to head.
 
     Return:
         <MPS>, the new MPS.
     '''
-    if parity==1: return mps
+    nsite=mps.nsite
+    assert(allclose(mps.forder,[0]+range(1,nsite)[::-1]))
     n1=(1-Z4scfg(spaceconfig).diagonal())/2
     site_axis=mps.site_axis
-    if len(mps.AL)==1:
-        mps.AL[0]=mps.AL[0]*(1-2*(n1%2))[tuple([slice(None)]+[newaxis]*(2-site_axis))]
-    elif len(mps.BL)==1:
-        return mps
-        mps.BL[0]=mps.BL[0]*(1-2*(n1%2))[tuple([slice(None)]+[newaxis]*(2-site_axis))]
+    if head2tail:
+        j=list(mps.forder).index(0)
+        norder=array(mps.forder)-1
+        norder[j]=nsite-1
     else:
-        pdb.set_trace()
+        j=list(mps.forder).index(nsite-1)
+        norder=array(mps.forder)+1
+        norder[j]=0
+    mps.forder=norder
+    if parity==1:
+        return mps
+    if j<mps.l:
+        mps.AL[j]=mps.AL[j]*(1-2*(n1%2))[tuple([slice(None)]+[newaxis]*(2-site_axis))]
+    else:
+        mps.BL[j-mps.l]=mps.BL[j-mps.l]*(1-2*(n1%2))[tuple([slice(None)]+[newaxis]*(2-site_axis))]
     return mps
 
 
