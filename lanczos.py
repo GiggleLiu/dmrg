@@ -37,11 +37,11 @@ def get_H_bm(hgen,bstr):
     Return:
         matrix, the hamiltonian matrix.
     '''
-    bmgen=get_bmgen(hgen.spaceconfig,bstr)
+    bmgen=get_bmgen(spaceconfig=hgen.spaceconfig,token=bstr)
     nsite=hgen.nsite
     for i in xrange(nsite):
         hgen.expand1()
-        bm=bmgen.update_blockmarker(hgen.block_marker,nsite=nsite)
+        bm=bmgen.update1(hgen.block_marker)
         hgen.trunc(U=None,block_marker=bm)
     return hgen.H,bm
 

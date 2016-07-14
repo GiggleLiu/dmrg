@@ -14,8 +14,7 @@ from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker,svdb
 from tba.hgen import SpinSpaceConfig
 from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString,tensor,is_commute
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
-from rglib.hexpand import signlib
-from blockmatrix import get_bmgen
+from blockmatrix import get_bmgen,sign4bm,show_bm
 from disc_symm import SymmetryHandler
 from superblock import SuperBlock,site_image,joint_extract_block
 from pydavidson import JDh
@@ -48,16 +47,16 @@ def _gen_hamiltonian_block0(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
     '''Get the combined hamiltonian for specific block.'''
     ndiml,ndimr=HL0.shape[0],HR0.shape[0]
     bml,bmr,bmg,target_block=blockinfo['bml'],blockinfo['bmr'],blockinfo['bmg'],blockinfo['target_block']
-    bm_tot=bmg.add(bml,bmr,nsite=hgen_l.N+hgen_r.N)
+    bm_tot=bmg.add(bml,bmr)
     t0=time.time()
     H1,H2=kron(HL0,sps.identity(ndimr)),kron(sps.identity(ndiml),HR0)
     t1=time.time()
-    H1=bm_tot.lextract_block_pre(H1,(target_block,target_block))
-    H2=bm_tot.lextract_block_pre(H2,(target_block,target_block))
+    H1=bm_tot.extract_block_pre(H1,(target_block,target_block),uselabel=True)
+    H2=bm_tot.extract_block_pre(H2,(target_block,target_block),uselabel=True)
     Hc=H1+H2
     sb=SuperBlock(hgen_l,hgen_r)
     for op in interop:
-        Hc=Hc+bm_tot.lextract_block_pre(sb.get_op(op),(target_block,target_block))
+        Hc=Hc+bm_tot.extract_block_pre(sb.get_op(op),(target_block,target_block),uselabel=True)
     t2=time.time()
     print 'Generate Hamiltonian %s, %s'%(t1-t0,t2-t1)
     return Hc,bm_tot
@@ -65,7 +64,7 @@ def _gen_hamiltonian_block0(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
 def _gen_hamiltonian_block(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
     '''Get the combined hamiltonian for specific block.'''
     ndiml,ndimr=HL0.shape[0],HR0.shape[0]
-    bm_tot,jointinfo=blockinfo['bmg'].add(blockinfo['bml'],blockinfo['bmr'],nsite=hgen_l.N+hgen_r.N,return_info=True)
+    bm_tot,jointinfo=blockinfo['bmg'].add(blockinfo['bml'],blockinfo['bmr'],return_info=True)
     blockinfo['jointinfo']=jointinfo
     blockinfo['bm_tot']=bm_tot
     t0=time.time()
@@ -295,7 +294,7 @@ class DMRGEngine(object):
         '''
         Use specific U1 symmetry.
         '''
-        self.bmg=get_bmgen(self.hgen.spaceconfig,qnumber)
+        self.bmg=get_bmgen(spaceconfig=self.hgen.spaceconfig,token=qnumber)
         self._target_block=target_block
 
     @property
@@ -504,8 +503,8 @@ class DMRGEngine(object):
                 kpmask_r=hgen_r.evolutor.kpmask(NR-2)
             else:
                 kpmask_l=kpmask_r=None
-            bml=self.bmg.update_blockmarker(hgen_l.block_marker,kpmask=kpmask_l,nsite=NL)
-            bmr=self.bmg.update_blockmarker(hgen_r.block_marker,kpmask=kpmask_r,nsite=NR)
+            bml=self.bmg.update1(hgen_l.block_marker,kpmask=kpmask_l)
+            bmr=self.bmg.update1(hgen_r.block_marker,kpmask=kpmask_r)
         else:
             bml=None #get_blockmarker(HL0)
             bmr=None #get_blockmarker(HR0)
@@ -530,7 +529,7 @@ class DMRGEngine(object):
                 #2. NL==NR, reflection is not used(and not the first iteration).
                 self.symm_handler.update_handlers(OPL=OPL,OPR=OPR,useC=False)
             else:
-                nl=bml.antiblockize(int32(1-signlib.get_sign_from_bm(bml,diag_only=True))/2)
+                nl=bml.antiblockize(int32(1-sign4bm(bml,self.bmg,nsite=hgen_l.N+hgen_r.N,diag_only=True))/2)
                 self.symm_handler.update_handlers(OPL=OPL,OPR=OPR,n=nl,useC=True)
             v00=self.symm_handler.project_state(phi=initial_state)
             if self.iprint==10:assert(self.symm_handler.check_op(H))
@@ -543,9 +542,9 @@ class DMRGEngine(object):
         if self.bmg is None or target_block is None:
             v0=v00/norm(v00)
         else:
-            v0=bm_tot.lextract_block_pre(v00,(target_block,))
+            v0=bm_tot.extract_block_pre(v00,(target_block,),uselabel=True)
             if projector is not None:
-                projector=bm_tot.lextract_block_pre(projector,(target_block,target_block))
+                projector=bm_tot.extract_block_pre(projector,(target_block,target_block),uselabel=True)
 
         ##2. diagonalize to get desired number of levels
         detect_C2=self.symm_handler.target_sector.has_key('C')# and not symm_handler.useC
@@ -677,7 +676,7 @@ class DMRGEngine(object):
             if self.iprint==10 and not bm.check_blockdiag(rho,tol=1e-5):
                 ion()
                 pcolor(exp(abs(rho.toarray().real)))
-                bm.show()
+                show_bm(bm)
                 pdb.set_trace()
                 raise Exception('''Density matrix is not block diagonal, which is not expected,
         1. make sure your are using additive good quantum numbers.

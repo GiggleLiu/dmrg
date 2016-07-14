@@ -10,6 +10,7 @@ import copy,time,pdb,warnings
 
 from rglib.hexpand import Z4scfg,kron
 from rglib.mps import OpString,OpUnit,OpCollection
+from blockmatrix import get_lshift1
 
 __all__=['site_image','joint_extract_block','SuperBlock']
 
@@ -59,18 +60,16 @@ def joint_extract_block(HL0,HR0,bml,bmr,bmg,bm_tot,jointinfo,target_block,pre=Tr
         #lext,rext=bml.lextract_block_pre,bmr.lextract_block_pre
         HL0=bml.blockize(HL0).tocsr()
         HR0=bmr.blockize(HR0).tocsr()
-        lext,rext=bml.lextract_block,bmr.lextract_block
-    else:
-        lext,rext=bml.lextract_block,bmr.lextract_block
+    lext,rext=bml.extract_block,bmr.extract_block
     for i,(lli,lri) in enumerate(pairs):
         if lshift is not None:
             j,(llj,lrj)=js[i],shifted_pairs[i]
             if j is None:
                 continue
 
-            lcell=lext(HL0,(_format_label(lli),_format_label(llj)),axes=(0,1))
+            lcell=lext(HL0,(_format_label(lli),_format_label(llj)),axes=(0,1),uselabel=True)
             if lcell.nnz!=0:
-                rcell=rext(HR0,(_format_label(lri),_format_label(lrj)),axes=(0,1))
+                rcell=rext(HR0,(_format_label(lri),_format_label(lrj)),axes=(0,1),uselabel=True)
                 if rcell.nnz!=0:
                     if Hc[i,j] is None:
                         Hc[i,j]=kron(lcell,rcell)
@@ -81,9 +80,9 @@ def joint_extract_block(HL0,HR0,bml,bmr,bmg,bm_tot,jointinfo,target_block,pre=Tr
             rrow=rext(HR0,(_format_label(lri),),axes=(0,)).tocsc()
             if lrow.nnz!=0 and rrow.nnz!=0:
                 for j,(llj,lrj) in enumerate(pairs):
-                    lcell=lext(lrow,(_format_label(llj),),axes=(1,))
+                    lcell=lext(lrow,(_format_label(llj),),axes=(1,),uselabel=True)
                     if lcell.nnz!=0:
-                        rcell=rext(rrow,(_format_label(lrj),),axes=(1,))
+                        rcell=rext(rrow,(_format_label(lrj),),axes=(1,),uselabel=True)
                         if rcell.nnz!=0:
                             if Hc[i,j] is None:
                                 Hc[i,j]=kron(lcell,rcell)
@@ -214,7 +213,7 @@ class SuperBlock(object):
             op=kron(mA,mB)
         else:
             bmg=blockinfo['bmg']
-            lshift=bmg.get_lshift1(ouA.data)
+            lshift=get_lshift1(bmg,ouA.data)
             op=joint_extract_block(mA,mB,pre=True,lshift=lshift,**blockinfo)
         return op
 

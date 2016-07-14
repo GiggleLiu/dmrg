@@ -173,7 +173,7 @@ class DMRGTest():
         H=get_H(hgen=hgen1)
         H2,bm2=get_H_bm(hgen=hgen2,bstr='M')
         Emin=eigsh(H,k=1)[0]
-        Emin2=eigsh(bm2.lextract_block(H2,(0.,0,)),k=1)[0]
+        Emin2=eigsh(bm2.extract_block(H2,(0.,0,),uselabel=True),k=1)[0]
         print 'The Ground State Energy is %s, tolerence %s.'%(Emin,Emin-Emin2)
         assert_almost_equal(Emin,Emin2)
 
