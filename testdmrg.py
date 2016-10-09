@@ -150,7 +150,7 @@ class DMRGTest():
         H=get_H(hgen1)
         EG1=eigsh(H,k=1,which='SA')[0]
         dmrgegn=DMRGEngine(hgen=hgen2,tol=0,reflect=True)
-        dmrgegn.use_U1_symmetry('M',target_block=0)
+        dmrgegn.use_U1_symmetry('M',target_block=zeros(1))
         EG2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0)[0]
         assert_almost_equal(EG1,EG2,decimal=4)
 
@@ -160,7 +160,7 @@ class DMRGTest():
         model=self.get_model(maxiter+2,1)
         hgen=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='masked')
         dmrgegn=DMRGEngine(hgen=hgen,tol=0,reflect=True)
-        dmrgegn.use_U1_symmetry('M',target_block=0)
+        dmrgegn.use_U1_symmetry('M',target_block=zeros(1))
         EG=dmrgegn.run_infinite(maxiter=maxiter,maxN=20,tol=0)[0]
         assert_almost_equal(EG,0.25-log(2),decimal=2)
 
@@ -173,7 +173,7 @@ class DMRGTest():
         H=get_H(hgen=hgen1)
         H2,bm2=get_H_bm(hgen=hgen2,bstr='M')
         Emin=eigsh(H,k=1)[0]
-        Emin2=eigsh(bm2.extract_block(H2,(0.,0,),uselabel=True),k=1)[0]
+        Emin2=eigsh(bm2.extract_block(H2,(zeros(1),zeros(1)),uselabel=True),k=1)[0]
         print 'The Ground State Energy is %s, tolerence %s.'%(Emin,Emin-Emin2)
         assert_almost_equal(Emin,Emin2)
 

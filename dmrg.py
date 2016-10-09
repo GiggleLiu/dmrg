@@ -14,7 +14,7 @@ from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker,svdb
 from tba.hgen import SpinSpaceConfig
 from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString,tensor,is_commute
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
-from blockmatrix import get_bmgen,sign4bm,show_bm
+from blockmatrix import SimpleBMG,sign4bm,show_bm
 from disc_symm import SymmetryHandler
 from superblock import SuperBlock,site_image,joint_extract_block
 from pydavidson import JDh
@@ -294,7 +294,7 @@ class DMRGEngine(object):
         '''
         Use specific U1 symmetry.
         '''
-        self.bmg=get_bmgen(spaceconfig=self.hgen.spaceconfig,token=qnumber)
+        self.bmg=SimpleBMG(spaceconfig=self.hgen.spaceconfig,qstring=qnumber)
         self._target_block=target_block
 
     @property
@@ -560,7 +560,7 @@ class DMRGEngine(object):
         t2=time.time()
         ##3. permute back eigen-vectors into original representation al,sl+1,sl+2,al+2
         if bm_tot is not None:
-            bindex=bm_tot.labels.index(target_block)
+            bindex=bm_tot._label_dict[tuple(target_block)]
             vl=array([bm_tot.antiblockize(sps.coo_matrix((v[:,i],(arange(bm_tot.Nr[bindex],\
                     bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128').toarray(),axes=(0,)).ravel()\
                     for i in xrange(v.shape[-1])])
@@ -607,11 +607,8 @@ class DMRGEngine(object):
             phi=bml.blockize(phi,axes=(0,))
             phi=bmr.blockize(phi,axes=(1,))
             def mapping_rule(bli):
-                res=self.bmg.labels_sub([self.target_block],[bli])[0]
-                try:
-                    return res.item()
-                except:
-                    return tuple(res)
+                res=self.bmg.bcast_sub([self.target_block],[bli])[0]
+                return tuple(res)
             U,S,V,S2=svdb(phi,bm=bml,bm2=bmr,mapping_rule=mapping_rule,full_matrices=True);U2=V.T.conj()
         else:
             U,S,V=svd(phi,full_matrices=True);U2=V.T.conj()

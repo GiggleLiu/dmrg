@@ -2,7 +2,7 @@ from numpy import *
 from scipy.sparse.linalg import eigsh
 import copy,time,pdb,warnings
 
-from blockmatrix.blocklib import eigbsh,eigbh,get_bmgen,tobdmatrix
+from blockmatrix.blocklib import eigbsh,eigbh,SimpleBMG,tobdmatrix
 from rglib.hexpand import NullEvolutor
 
 __all__=['get_H','get_H_bm']
@@ -37,7 +37,7 @@ def get_H_bm(hgen,bstr):
     Return:
         matrix, the hamiltonian matrix.
     '''
-    bmgen=get_bmgen(spaceconfig=hgen.spaceconfig,token=bstr)
+    bmgen=SimpleBMG(spaceconfig=hgen.spaceconfig,qstring=bstr)
     nsite=hgen.nsite
     for i in xrange(nsite):
         hgen.expand1()
