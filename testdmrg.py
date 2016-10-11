@@ -13,8 +13,6 @@ from rglib.hexpand import RGHGen
 from rglib.hexpand import MaskedEvolutor,NullEvolutor,Evolutor
 from dmrg import DMRGEngine
 from lanczos import get_H,get_H_bm
-from vmps import VMPSEngine
-from vmpsapp import VMPSApp
 
 class HeisenbergModel(VMPSApp):
     '''
@@ -119,26 +117,6 @@ class DMRGTest():
             model=HeisenbergModel2(J=J,Jz=Jz,J2=J2,J2z=J2z,h=h,nsite=nsite)
         return model
 
-    def test_vmps(self):
-        '''
-        Run vMPS for Heisenberg model.
-        '''
-        nsite=10
-        filename='mps_heisenberg_%s.dat'%(nsite)
-        model=self.get_model(nsite,which=1)
-
-        #mps=MPS.load(filename)
-        #run dmrg to get the initial guess.
-        hgen=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='masked')
-        dmrgegn=DMRGEngine(hgen=hgen,tol=0,reflect=True)
-        dmrgegn.use_U1_symmetry('M',target_block=0)
-        EG,mps=dmrgegn.run_finite(endpoint=(1,'<-',0),maxN=40,tol=1e-12)
-        mps.save(filename)
-
-        #run vmps
-        vegn=VMPSEngine(H=model.H,k0=mps)
-        vegn.run()
-
     def test_dmrg_finite(self):
         '''
         Run iDMFT for heisenberg model.
@@ -180,4 +158,3 @@ class DMRGTest():
 DMRGTest().test_lanczos()
 DMRGTest().test_dmrg_finite()
 DMRGTest().test_dmrg_infinite()
-#DMRGTest().test_vmps()

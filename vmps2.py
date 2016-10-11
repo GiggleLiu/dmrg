@@ -188,24 +188,7 @@ class VMPS2Engine(object):
         '''Number of sites.'''
         return self.ket.nsite
 
-    def takeet_hmatrix(self,which,H,l):
-                '''
-                        Set the hamiltonian for specific length.
-                        
-                                Parameters:
-                                                :which: str,
-                                                
-                                                                * `l` -> the left part.
-                                                                                * `r` -> the right part.
-                                                                                            :H: <Tensor>, the hamiltonian.
-                                                                                                        :l: int, the length of block.
-                                                                                                                '''
-                                                                                                                        if which=='l':
-                                                                                                                                        self.LPART[l]=H
-                                                                                                                                                else:
-                                                                                                                                                                self.RPART[l]=H
-                                                                                                                                                                
-                                                                                                                                                                self,rightmove=True):
+    def take(self,rightmove=True):
         '''
         Take a step towards right.
         '''

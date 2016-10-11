@@ -3,12 +3,14 @@ Variational Matrix Product State.
 '''
 
 from numpy import *
+from scipy.linalg import svd
 from scipy.sparse.linalg import eigsh
 from scipy.sparse import csr_matrix,coo_matrix
 from matplotlib.pyplot import *
 import time,pdb
 
-from rglib.mps import NORMAL_ORDER,Contraction,contract,tensor
+from rglib.mps import NORMAL_ORDER,Contraction,contract,Tensor
+from pydavidson import JDh
 
 __all__=['VMPSEngine']
 
@@ -18,154 +20,187 @@ class VMPSEngine(object):
     '''
     Variational MPS Engine.
 
-    Parameters
-    -------------------
-    H:
-        The hamiltonian operator.
-    ket:
-        The <MPS>.
-    contractor_L/contractor_R:
-        The contractor from left and right.
+    Attributes:
+        :H: <MPO>, the hamiltonian operator.
+        :ket: <MPS>, the eigen state.
+        :labels: list, they are [physical-bra, physical-ket, bond-bra, bond-mpo, bond-ket]
+        :eigen_solver: str, eigenvalue solver.
+            *'JD', Jacobi-Davidson method.
+            *'LC', Lanczos, method.
     '''
-    def __init__(self,H,k0):
+    def __init__(self,H,k0,labels=['s','m','a','b','c'],eigen_solver='JD'):
         self.H=H
+        self.eigen_solver=eigen_solver
+        #set up initial ket
         self.ket=k0
-        self.ket<<self.ket.l  #right normalize the ket
-        self.l=0
+        self.ket<<self.ket.l-1  #right normalize the ket to the first bond, where we start our update
+        nsite=self.ket.nsite
 
-        nsite=k0.nsite
-        bra=self.bra
-        self.contractor_L=BHKContraction(bra,self.H,self.ket,l=0)
-        self.contractor_R=BHKContraction(bra,self.H,self.ket,l=nsite)
-        #first, left sweep to construct R.
-        self.contractor_R<<self.nsite
-        #self.contractor_L>>self.nsite
-        #ion()
-        #self.contractor_R.show()
+        #unify labels
+        self.labels=labels
+        self.ket.chlabel([labels[1],labels[4]])
+        self.H.chlabel([labels[0],labels[1],labels[3]])
 
-    @property
-    def bra(self):
-        '''Get the bra.'''
-        return self.ket.tobra(labels=[self.H.labels[0],self.ket.labels[1]+"'"],sharedata=True)
+        #the contraction results for left and right parts, the size as the key.
+        FL=Tensor(ones([1,1,1]),labels=['%s_0'%labels[2],'%s_0'%labels[3],'%s_0'%labels[4]])
+        FR=Tensor(ones([1,1,1]),labels=['%s_%s'%(labels[2],nsite),'%s_%s'%(labels[3],nsite),'%s_%s'%(labels[4],nsite)])
+        self.LPART={0:FL}
+        self.RPART={0:FR}
 
-    @property
-    def nsite(self):
-        '''Number of sites.'''
-        return self.ket.nsite
+        #initial contractions, fill the RPART(because we will start our update from left end)
+        bra=self.ket.tobra(labels=[labels[0],labels[2]],sharedata=True)  #do not deepcopy the data
+        for i in xrange(nsite-2):
+            cbra=bra.get(nsite-i-1,attach_S='B')
+            cket=self.ket.get(nsite-i-1,attach_S='B')
+            ch=self.H.get(nsite-i-1)
+            FR=cbra*FR*ch*cket
+            self.RPART[i+1]=FR
 
-    def update_move(self,M,direction,tol=1e-8):
+    def _eigsh(self,H,v0,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1,iprint=0):
         '''
-        Update the ket and move towards specific direction.
-
-        direction:
-
-            * '->', move rightward.
-            * '<-', move leftward.
-        tol:
-            The tolerence for compression.
+        solve eigenvalue problem.
         '''
-        #check validity of datas
-        assert(direction=='->' or direction=='<-')
-        nsite=self.nsite
-        l=self.l
-        if (l>=nsite and direction=='->') or (l<0 and direction=='<-'):
-            raise ValueError('Can not perform %s move for l = %s with %s sites in total.'%(direction,l,nsite))
-
-        ###!!!!'Ket or Bra, check!'
-        if direction=='->':
-            self.ket.update_right(M,tol=tol)
+        maxiter=5000
+        N=H.shape[0]
+        if iprint==10 and projector is not None and check_commute:
+            assert(is_commute(H,projector))
+        if self.eigen_solver=='LC':
+            k=max(lc_search_space,k)
+            if H.shape[0]<100:
+                e,v=eigh(H.toarray())
+                e,v=e[:k],v[:,:k]
+            else:
+                try:
+                    e,v=eigsh(H,k=k,which='SA',maxiter=maxiter,tol=tol,v0=v0)
+                except:
+                    e,v=eigsh(H,k=k+1,which='SA',maxiter=maxiter,tol=tol,v0=v0)
+            order=argsort(e)
+            e,v=e[order],v[:,order]
         else:
-            self.ket.update_left(M,tol=tol)
-        bra=self.bra
-        self.contractor_L.set_ket(self.ket)
-        self.contractor_L.set_bra(bra)
-        self.contractor_R.set_ket(self.ket)
-        self.contractor_R.set_bra(bra)
-        if direction=='->':
-            self.contractor_L>>1
-            self.l+=1
+            iprint=0
+            maxiter=500
+            if projector is not None:
+                e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,maxiter=maxiter,sigma=sigma,which='SA',iprint=iprint)
+            else:
+                if sigma is None:
+                    e,v=JDh(H,v0=v0,k=max(lc_search_space,k),projector=projector,tol=tol,maxiter=maxiter,which='SA',iprint=iprint)
+                else:
+                    e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,sigma=sigma,which='SL',\
+                            iprint=iprint,converge_bound=1e-10,maxiter=maxiter)
+
+        nstate=len(e)
+        if nstate==0:
+            raise Exception('No Converged Pair!!')
+        elif nstate==k or k>1:
+            return e,v
+
+        #filter out states meeting projector.
+        if projector is not None and lc_search_space!=1:
+            overlaps=array([abs(projector.dot(v[:,i]).conj().dot(v[:,i])) for i in xrange(nstate)])
+            mask0=overlaps>0.1
+            if not any(mask0):
+                raise Exception('Can not find any states meeting specific parity!')
+            mask=overlaps>0.9
+            if sum(mask)==0:
+                #check for degeneracy.
+                istate=where(mask0)[0][0]
+                warnings.warn('Wrong result or degeneracy accur!')
+            else:
+                istate=where(mask)[0][0]
+            v=projector.dot(v[:,istate:istate+1])
+            v=v/norm(v)
+            return e[istate:istate+1],v
         else:
-            self.contractor_R<<1
-            self.l-=1
+            #get the state with maximum overlap.
+            v0H=v0.conj()/norm(v0)
+            overlaps=array([abs(v0H.dot(v[:,i])) for i in xrange(nstate)])
+            istate=argmax(overlaps)
+            if overlaps[istate]<0.7:
+                warnings.warn('Do not find any states same correspond to the one from last iteration!%s'%overlaps)
+        e,v=e[istate:istate+1],v[:,istate:istate+1]
+        return e,v
 
-    def fix_boundary(self,turning_to=''):
-        '''Fix the boundary and make ready for a turnning.'''
-        if turning_to=='':
-            turning_to='->' if self.nsite==-1 else '<-'
-        assert(turning_to=='->' or turning_to=='<-')
-        if turning_to=='->':
-            assert(self.l==-1)
-            self.l+=1
-            self.contractor_L=BHKContraction(self.bra,self.H,self.ket,l=0)
-        else:
-            nsite=self.nsite
-            assert(self.l==nsite)
-            self.l-=1
-            self.contractor_R=BHKContraction(self.bra,self.H,self.ket,l=nsite)
-
-    def get_optimal_ket(self,L,W,R):
-        '''
-        Optimize the state at current position.
-
-        L/R:
-            The left contraction and right contraction.
-        W:
-            The MPO at this site.
-
-        *return*:
-            tuple of (EG per site, optimal M-matrix of current position)
-        '''
-        t=contract(L,W,R)
-        #reshape into square sparse matrix.
-        if len(t.labels)!=6:
-            raise Exception('Wrong number of vertices, check your labels!')
-        llink_axis,rlink_axis=self.ket.llink_axis,self.ket.rlink_axis
-        t=transpose(t,axes=(0,2,4,1,3,5))  #this is the normal order
-        n=prod(t.shape[:3])
-        mat=t.reshape([n,n])
-        mat[abs(mat)<ZERO_REF]=0
-        mat=csr_matrix(mat)
-        Emin,vec=eigsh(mat,which='SA',k=1,tol=1e-12,maxiter=5000)
-        M=tensor.Tensor(vec.reshape(t.shape[:3]),labels=t.labels[3:])
-        M=tensor.chorder(M,old_order=NORMAL_ORDER,target_order=self.ket.order)
-        return Emin/self.nsite,M
-
-    def run(self,maxiter=10,tol=0):
+    def run(self,endpoint=(7,'->',1),maxN=50,tol=0):
         '''
         Run this application.
 
-        maxiter:
-            The maximum sweep iteration, one iteration is contains one left sweep, and one right sweep through the chain.
-        tol:
-            The tolerence.
+        Parameters:
+            :maxiter: int, the maximum sweep iteration, one iteration is contains one left sweep, and one right sweep through the chain.
+            :maxN: list/int, the maximum kept dimension.
+            :tol: float, the tolerence.
+
+        Return:
+            (Emin, <MPS>)
         '''
+        #check data
+        maxiter=endpoint[0]+1
+        nsite=self.ket.nsite
+        hndim=self.ket.hndim
+        if isinstance(maxN,int): maxN=[maxN]*maxiter
+        if endpoint[1]=='->':
+            assert(endpoint[2]>=1 and endpoint[2]<nsite)
+        elif endpoint[1]=='<-':
+            assert(endpoint[2]>=2 and endpoint[2]<nsite-1)
+        else:
+            raise ValueError()
+
         elist=[]
-        nsite=self.nsite
-        L=self.contractor_L.get_memory(self.l)
-        R=self.contractor_R.get_memory(self.l+1)
-        W=self.H.get(self.l)
         for iiter in xrange(maxiter):
             print '########### STARTING NEW ITERATION %s ################'%iiter
-            for direction,iterator in zip(['->','<-'],[xrange(nsite),xrange(nsite-1,-1,-1)]):
-                for i in iterator:
-                    print 'Running iter = %s, direction = %s, n = %s'%(iiter,direction,i)
+            for direction,iterator in zip(['->','<-'],[xrange(1,nsite),xrange(nsite-2,1,-1)]):
+                for l in iterator:   #l is the center(of two site) bond.
+                    print 'Running iter = %s, direction = %s, l = %s'%(iiter,direction,l)
+                    print 'A'*(l-1)+'..'+'B'*(nsite-l-1)
                     t0=time.time()
-                    L=self.contractor_L.get_memory(self.l)
-                    R=self.contractor_R.get_memory(self.l+1)
-                    W=self.H.get(self.l)
-                    Emin,M=self.get_optimal_ket(L,W,R)
+
+                    #construct the Tensor for Hamilonian
+                    self.ket>>l-self.ket.l
+                    FL=self.LPART[l-1]
+                    FR=self.RPART[nsite-l-1]
+                    O1,O2=self.H.get(l-1),self.H.get(l)
+                    K10,K20=self.ket.get(l-1,attach_S='B'),self.ket.get(l,attach_S='B')
+                    T=(FL*O1*O2*FR).chorder([0,2,4,6,1,3,5,7])
+                    dim=prod(T.shape[:4])
+                    dim_l,dim_r=prod(T.shape[:2]),prod(T.shape[2:4])
+                    T=T.reshape([dim,dim])
+
+                    #Find the optimal ket
+                    v0=asarray((K10*K20).ravel())
+                    pdb.set_trace()
+                    Emin,K1K2=self._eigsh(csr_matrix(T),v0=v0,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1)
+
+                    #update our ket
+                    K1,S,K2=svd(K1K2.reshape([dim_l,dim_r]),full_matrices=False)
+                    if len(S)>maxN[iiter]:
+                        #do the truncation
+                        Smin=sort(S)[-maxN[iiter]]
+                        kpmask=S>=Smin
+                        K1,S,K2=K1[:,kpmask],S[kpmask],K2[kpmask]
+                    self.ket.AL[-1],self.ket.S,self.ket.BL[0]=Tensor(K1.reshape([K10.shape[0],hndim,-1]),labels=K10.labels),\
+                            S,Tensor(K2.reshape([-1,hndim,K20.shape[2]]),labels=K20.labels)
+
+                    #update our contractions.
+                    cket=self.ket.get(l-1,attach_S='B')
+                    cbra=cket.conj()
+                    cbra.labels=['%s_%s'%(self.labels[2],l-1),'%s_%s'%(self.labels[0],l-1),'%s_%s'%(self.labels[2],l)]
+                    self.LPART[l]=cbra*self.LPART[l-1]*self.H.get(l-1)*cket
+
+                    cket=self.ket.get(l,attach_S='B')
+                    cbra=cket.conj()
+                    cbra.labels=['%s_%s'%(self.labels[2],l),'%s_%s'%(self.labels[0],l),'%s_%s'%(self.labels[2],l+1)]
+                    self.RPART[nsite-l]=cbra*self.RPART[nsite-l-1]*self.H.get(l)*cket
+
+                    #schedular check
                     elist.append(Emin)
-                    self.update_move(M,direction=direction)
                     t1=time.time()
                     diff=Inf if len(elist)<=1 else elist[-1]-elist[-2]
-                    print 'Get Emin/site = %.12f, tol = %s, Elapse -> %s'%(Emin,diff,t1-t0)
-                self.fix_boundary(turning_to='<-' if direction=='->' else '->')
+                    print 'Get Emin = %.12f, tol = %s, Elapse -> %s'%(Emin,diff,t1-t0)
+                    if iiter==endpoint[0] and direction==endpoint[1] and l==endpoint[2]:
+                        print 'RUN COMPLETE!'
+                        return Emin,self.ket
+
+            #schedular check for each iteration
             if iiter==0:
-                Emin_last=elist[0]
+                Emin_last=Inf
             diff=Emin_last-Emin
-            print 'ITERATION SUMMARY: Emin/site = %s, tol = %s, Elapse -> %s'%(Emin,diff,t1-t0)
-            if abs(diff)<tol:
-                print 'Converged, Breaking!'
-                return Emin
-            else:
-                Emin_last=Emin
+            print 'ITERATION SUMMARY: Emin/site = %s, tol = %s'%(Emin,diff)
