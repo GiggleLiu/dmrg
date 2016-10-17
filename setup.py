@@ -2,6 +2,7 @@
 def configuration(parent_package='',top_path=None):
     from numpy.distutils.misc_util import Configuration
     config=Configuration('dmrg',parent_package,top_path,version='0.0.0',author='JinGuo Leo',author_email='cacate0129@gmail.com')
+    config.add_extension('flib.flib',['flib/flib.f90'])
     config.make_config_py()
     return config
 
