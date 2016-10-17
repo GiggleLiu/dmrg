@@ -14,7 +14,7 @@ from rglib.hexpand import MaskedEvolutor,NullEvolutor,Evolutor
 from dmrg import DMRGEngine
 from lanczos import get_H,get_H_bm
 
-class HeisenbergModel(VMPSApp):
+class HeisenbergModel(object):
     '''
     Heisenberg model application for vMPS.
 
@@ -49,7 +49,7 @@ class HeisenbergModel(VMPSApp):
         mpc.compactify()
         self.H_serial=mpc
 
-class HeisenbergModel2(VMPSApp):
+class HeisenbergModel2(object):
     '''
     Heisenberg model application for vMPS.
 

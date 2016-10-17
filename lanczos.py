@@ -1,5 +1,6 @@
 from numpy import *
 from scipy.sparse.linalg import eigsh
+import scipy.sparse as sps
 import copy,time,pdb,warnings
 
 from blockmatrix.blocklib import eigbsh,eigbh,SimpleBMG,tobdmatrix
@@ -41,7 +42,7 @@ def get_H_bm(hgen,bstr):
     nsite=hgen.nsite
     for i in xrange(nsite):
         hgen.expand1()
-        bm=bmgen.update1(hgen.block_marker)
-        hgen.trunc(U=None,block_marker=bm)
+        bm,pm=bmgen.update1(hgen.block_marker)
+        hgen.trunc(U=sps.coo_matrix((ones(bm.N),(pm,arange(bm.N))),dtype='int32'),block_marker=bm)
     return hgen.H,bm
 

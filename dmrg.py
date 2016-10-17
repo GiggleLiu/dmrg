@@ -14,7 +14,7 @@ from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker,svdb
 from tba.hgen import SpinSpaceConfig
 from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString,tensor,is_commute
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
-from blockmatrix import SimpleBMG,sign4bm,show_bm
+from blockmatrix import SimpleBMG,sign4bm,show_bm,trunc_bm
 from disc_symm import SymmetryHandler
 from superblock import SuperBlock,site_image,joint_extract_block
 from pydavidson import JDh
@@ -46,20 +46,21 @@ def _gen_hamiltonian_full(HL0,HR0,hgen_l,hgen_r,interop):
 def _gen_hamiltonian_block0(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
     '''Get the combined hamiltonian for specific block.'''
     ndiml,ndimr=HL0.shape[0],HR0.shape[0]
-    bml,bmr,bmg,target_block=blockinfo['bml'],blockinfo['bmr'],blockinfo['bmg'],blockinfo['target_block']
-    bm_tot=bmg.add(bml,bmr)
+    bml,bmr,pml,pmr,bmg,target_block=blockinfo['bml'],blockinfo['bmr'],blockinfo['pml'],blockinfo['pmr'],blockinfo['bmg'],blockinfo['target_block']
+    bm_tot,pm=bmg.join_bms([bml,bmr])
+    pm=((pml*len(pmr))[:,newaxis]+pmr).ravel()[pm]
     t0=time.time()
     H1,H2=kron(HL0,sps.identity(ndimr)),kron(sps.identity(ndiml),HR0)
     t1=time.time()
-    H1=bm_tot.extract_block_pre(H1,(target_block,target_block),uselabel=True)
-    H2=bm_tot.extract_block_pre(H2,(target_block,target_block),uselabel=True)
+    indices=pm[bm_tot.get_slice(target_block,uselabel=True)]
+    H1,H2=H1.tocsr()[indices][:,indices],H2.tocsr()[indices][:,indices]
     Hc=H1+H2
     sb=SuperBlock(hgen_l,hgen_r)
     for op in interop:
-        Hc=Hc+bm_tot.extract_block_pre(sb.get_op(op),(target_block,target_block),uselabel=True)
+        Hc=Hc+(sb.get_op(op)).tocsr()[indices][:,indices]
     t2=time.time()
     print 'Generate Hamiltonian %s, %s'%(t1-t0,t2-t1)
-    return Hc,bm_tot
+    return Hc,bm_tot,pm
 
 def _gen_hamiltonian_block(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
     '''Get the combined hamiltonian for specific block.'''
@@ -132,7 +133,7 @@ class DMRGEngine(object):
         :LPART/RPART: dict, the left/right sweep of hamiltonian generators.
         :_tails(private): list, the last item of A matrices, which is used to construct the <MPS>.
     '''
-    def __init__(self,hgen,tol=0,reflect=False,eigen_solver='JD',iprint=1):
+    def __init__(self,hgen,tol=0,reflect=False,eigen_solver='LC',iprint=1):
         self.tol=tol
         self.hgen=hgen
         self.eigen_solver=eigen_solver
@@ -501,23 +502,24 @@ class DMRGEngine(object):
             if isinstance(hgen_l.evolutor,MaskedEvolutor) and n>1:
                 kpmask_l=hgen_l.evolutor.kpmask(NL-2)     #kpmask is also related to block marker!!!
                 kpmask_r=hgen_r.evolutor.kpmask(NR-2)
+                bml,pml=self.bmg.update1(trunc_bm(hgen_l.block_marker,kpmask_l))
+                bmr,pmr=self.bmg.update1(trunc_bm(hgen_r.block_marker,kpmask_r))
             else:
-                kpmask_l=kpmask_r=None
-            bml=self.bmg.update1(hgen_l.block_marker,kpmask=kpmask_l)
-            bmr=self.bmg.update1(hgen_r.block_marker,kpmask=kpmask_r)
+                bml,pml=self.bmg.update1(hgen_l.block_marker)
+                bmr,pmr=self.bmg.update1(hgen_r.block_marker)
         else:
-            bml=None #get_blockmarker(HL0)
-            bmr=None #get_blockmarker(HR0)
+            bml,pml=None,None #get_blockmarker(HL0)
+            bmr,pmr=None,None #get_blockmarker(HR0)
 
         if target_block is None:
             Hc,bm_tot=_gen_hamiltonian_full(HL0,HR0,hgen_l,hgen_r,interop=interop),None
         else:
             if maxN<100:    #efficiency cross over
-                Hc,bm_tot=_gen_hamiltonian_block0(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,\
-                        blockinfo=dict(bml=bml,bmr=bmr,bmg=self.bmg,target_block=target_block),interop=interop)
+                Hc,bm_tot,pm_tot=_gen_hamiltonian_block0(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,\
+                        blockinfo=dict(bml=bml,bmr=bmr,pml=pml,pmr=pmr,bmg=self.bmg,target_block=target_block),interop=interop)
             else:
-                Hc,bm_tot=_gen_hamiltonian_block(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,\
-                        blockinfo=dict(bml=bml,bmr=bmr,bmg=self.bmg,target_block=target_block),interop=interop)
+                Hc,bm_tot,pm_tot=_gen_hamiltonian_block(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,\
+                        blockinfo=dict(bml=bml,bmr=bmr,pml=pml,pmr=pmr,bmg=self.bmg,target_block=target_block),interop=interop)
 
         #get the starting eigen state v00!
         if initial_state is None:
@@ -542,7 +544,8 @@ class DMRGEngine(object):
         if self.bmg is None or target_block is None:
             v0=v00/norm(v00)
         else:
-            v0=bm_tot.extract_block_pre(v00,(target_block,),uselabel=True)
+            indices=pm_tot[bm_tot.get_slice(target_block,uselabel=True)]
+            v0=v00[indices]
             if projector is not None:
                 projector=bm_tot.extract_block_pre(projector,(target_block,target_block),uselabel=True)
 
@@ -561,8 +564,8 @@ class DMRGEngine(object):
         ##3. permute back eigen-vectors into original representation al,sl+1,sl+2,al+2
         if bm_tot is not None:
             bindex=bm_tot._label_dict[tuple(target_block)]
-            vl=array([bm_tot.antiblockize(sps.coo_matrix((v[:,i],(arange(bm_tot.Nr[bindex],\
-                    bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128').toarray(),axes=(0,)).ravel()\
+            vl=array([sps.coo_matrix((v[:,i],(arange(bm_tot.Nr[bindex],\
+                    bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128').toarray()[argsort(pm_tot)].ravel()\
                     for i in xrange(v.shape[-1])])
         else:
             vl=v.T
@@ -572,7 +575,7 @@ class DMRGEngine(object):
             v[abs(v)<ZERO_REF]=0
         #spec1,U1,kpmask1,trunc_error=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='l',maxN=maxN)
         U1,specs,U2,(kpmask1,kpmask2),trunc_error=self.svd_analysis(phis=vl,bml=HL0.shape[0] if bml is None else bml,\
-                bmr=HR0.shape[0] if bmr is None else bmr,maxN=maxN)
+                bmr=HR0.shape[0] if bmr is None else bmr,pml=pml,pmr=pmr,maxN=maxN)
         print '%s states kept.'%sum(kpmask1)
         hgen_l.trunc(U=U1,block_marker=bml,kpmask=kpmask1)  #kpmask is also important for setting up the sign
         if hgen_l is not hgen_r:
@@ -583,7 +586,7 @@ class DMRGEngine(object):
         print 'Elapse -> prepair:%.2f, eigen:%.2f, trunc: %.2f'%(t1-t0,t2-t1,t3-t2)
         return e,trunc_error,phil
 
-    def svd_analysis(self,phis,bml,bmr,maxN):
+    def svd_analysis(self,phis,bml,bmr,pml,pmr,maxN):
         '''
         The direct analysis of state(svd).
         
@@ -604,8 +607,8 @@ class DMRGEngine(object):
         phi=sum(phis,axis=0).reshape([ndiml,ndimr])/sqrt(len(phis))  #construct wave function of equal distribution of all states.
         phi[abs(phi)<ZERO_REF]=0
         if use_bm:
-            phi=bml.blockize(phi,axes=(0,))
-            phi=bmr.blockize(phi,axes=(1,))
+            phi=phi[pml]
+            phi=phi[:,pmr]
             def mapping_rule(bli):
                 res=self.bmg.bcast_sub([self.target_block],[bli])[0]
                 return tuple(res)

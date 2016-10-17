@@ -3,18 +3,38 @@ Variational Matrix Product State.
 '''
 
 from numpy import *
-from scipy.linalg import svd
+from scipy.linalg import svd,eigh
 from scipy.sparse.linalg import eigsh
 from scipy.sparse import csr_matrix,coo_matrix
 from matplotlib.pyplot import *
 import time,pdb
 
-from rglib.mps import NORMAL_ORDER,Contraction,contract,Tensor
+from rglib.mps import NORMAL_ORDER,Contraction,contract,Tensor,autoset_bms,svdbd,check_validity
+from blockmatrix import trunc_bm
 from pydavidson import JDh
 
 __all__=['VMPSEngine']
 
-ZERO_REF=1e-15
+ZERO_REF=1e-12
+DEBUG=True
+
+def _evolve(mpo,ket,bra=None,nstep=None,fromleft=True):
+    nsite=ket.nsite
+    if nstep is None:nstep=nsite
+    if bra is None:
+        bra=ket.tobra(labels=[mpo.labels[0],ket.labels[1]+'\''])
+    if fromleft:
+        FL=Tensor(ones([1,1,1]),labels=[bra.get(0,attach_S='B').labels[0],mpo.get(0).labels[0],ket.get(0,attach_S='B').labels[0]])
+    else:
+        FL=Tensor(ones([1,1,1]),labels=[bra.get(nsite-1,attach_S='B').labels[2],mpo.get(nsite-1).labels[3],ket.get(nsite-1,attach_S='B').labels[2]])
+
+    for i in xrange(nstep):
+        ib=i if fromleft else nsite-i-1
+        cbra=bra.get(ib,attach_S='B')
+        cket=ket.get(ib,attach_S='B')
+        ch=mpo.get(ib)
+        FL=cbra*FL*ch*cket
+    return FL
 
 class VMPSEngine(object):
     '''
@@ -28,9 +48,10 @@ class VMPSEngine(object):
             *'JD', Jacobi-Davidson method.
             *'LC', Lanczos, method.
     '''
-    def __init__(self,H,k0,labels=['s','m','a','b','c'],eigen_solver='JD'):
+    def __init__(self,H,k0,labels=['s','m','a','b','c'],eigen_solver='JD',bmg=None):
         self.H=H
         self.eigen_solver=eigen_solver
+        self.bmg=bmg
         #set up initial ket
         self.ket=k0
         self.ket<<self.ket.l-1  #right normalize the ket to the first bond, where we start our update
@@ -41,14 +62,19 @@ class VMPSEngine(object):
         self.ket.chlabel([labels[1],labels[4]])
         self.H.chlabel([labels[0],labels[1],labels[3]])
 
-        #the contraction results for left and right parts, the size as the key.
-        FL=Tensor(ones([1,1,1]),labels=['%s_0'%labels[2],'%s_0'%labels[3],'%s_0'%labels[4]])
-        FR=Tensor(ones([1,1,1]),labels=['%s_%s'%(labels[2],nsite),'%s_%s'%(labels[3],nsite),'%s_%s'%(labels[4],nsite)])
-        self.LPART={0:FL}
-        self.RPART={0:FR}
+        #setup block markers.
+        if bmg is not None:
+            autoset_bms(self.ket,bmg)
+            autoset_bms(self.H,bmg)
 
         #initial contractions, fill the RPART(because we will start our update from left end)
         bra=self.ket.tobra(labels=[labels[0],labels[2]],sharedata=True)  #do not deepcopy the data
+
+        #the contraction results for left and right parts, the size as the key.
+        FL=Tensor(ones([1,1,1]),labels=[bra.get(0).labels[0],self.H.get(0).labels[0],self.ket.get(0).labels[0]])
+        FR=Tensor(ones([1,1,1]),labels=[bra.get(nsite-1).labels[-1],self.H.get(nsite-1).labels[-1],self.ket.get(nsite-1).labels[-1]])
+        self.LPART={0:FL}
+        self.RPART={0:FR}
         for i in xrange(nsite-2):
             cbra=bra.get(nsite-i-1,attach_S='B')
             cket=self.ket.get(nsite-i-1,attach_S='B')
@@ -159,42 +185,81 @@ class VMPSEngine(object):
                     FR=self.RPART[nsite-l-1]
                     O1,O2=self.H.get(l-1),self.H.get(l)
                     K10,K20=self.ket.get(l-1,attach_S='B'),self.ket.get(l,attach_S='B')
+                    ta=time.time()
                     T=(FL*O1*O2*FR).chorder([0,2,4,6,1,3,5,7])
+                    tb=time.time()
+                    print 'COST A:',tb-ta
                     dim=prod(T.shape[:4])
                     dim_l,dim_r=prod(T.shape[:2]),prod(T.shape[2:4])
-                    T=T.reshape([dim,dim])
+                    t00=time.time()
+                    T=T.merge_axes(slice(0,4),bmg=self.bmg,signs=[1,1,1,-1],return_pm=False,compact_form=False)
+                    T=T.merge_axes(slice(1,5),bmg=self.bmg,signs=[1,1,1,-1],return_pm=False,compact_form=False)
+                    t01=time.time()
+                    print 'COST B:',t01-t00
+                    #get the specific block for T, the `charge` neutral block
+                    #first, get the slice.
+                    bmd,pmd=T.labels[1].bm.compact_form()
+                    sls=bmd.get_slice(zeros(len(self.bmg.qstring),dtype='int32'),uselabel=True)
+                    indices=pmd[sls]
+                    #second, get the hamiltonian.
+                    Tc=T[indices][:,indices]
+                    Tc[abs(Tc)<ZERO_REF]=0
 
-                    #Find the optimal ket
-                    v0=asarray((K10*K20).ravel())
-                    pdb.set_trace()
-                    Emin,K1K2=self._eigsh(csr_matrix(T),v0=v0,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1)
+                    #third, get the initial vector
+                    K1K20=(K10*K20).merge_axes(slice(0,2),bmg=self.bmg,signs=[1,1],compact_form=False).merge_axes(slice(1,3),bmg=self.bmg,signs=[-1,1],compact_form=False)
+                    v0=asarray((K1K20).ravel())
+                    v0c=v0[indices]
+                    if DEBUG:
+                        Et=_evolve(self.H,self.ket)
+                        E0=v0.dot(T.dot(v0))
+                        print 'Checking for energy expectation! E(true)=%s, E(now)=%s'%(Et,E0)
+                        assert(abs(Et-E0)<1e-8)
+                    Emin,K1K2c=self._eigsh(csr_matrix(Tc),v0=v0c,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1)
+                    K1K2=zeros(dim,dtype='complex128')
+                    K1K2[indices]=K1K2c
+                    t02=time.time()
 
                     #update our ket
-                    K1,S,K2=svd(K1K2.reshape([dim_l,dim_r]),full_matrices=False)
+                    K1K2=Tensor(K1K2.reshape([dim_l,dim_r]),labels=K1K20.labels)
+                    #make it block diagonal
+                    K1K2_block,pms=K1K2.b_reorder(return_pm=True)
+                    #perform svd and roll back to original non-block structure
+                    K1,S,K2=svdbd(K1K2_block,cbond_str='%s_%s'%(self.labels[-1],l))
+                    K1,K2=K1[argsort(pms[0])],K2[:,argsort(pms[1])]
+                    #do the truncation
                     if len(S)>maxN[iiter]:
-                        #do the truncation
                         Smin=sort(S)[-maxN[iiter]]
                         kpmask=S>=Smin
                         K1,S,K2=K1[:,kpmask],S[kpmask],K2[kpmask]
-                    self.ket.AL[-1],self.ket.S,self.ket.BL[0]=Tensor(K1.reshape([K10.shape[0],hndim,-1]),labels=K10.labels),\
-                            S,Tensor(K2.reshape([-1,hndim,K20.shape[2]]),labels=K20.labels)
+                        bm_new=trunc_bm(K2.labels[0].bm,kpmask=kpmask)
+                        K2.labels[0].bm=K1.labels[1].bm=bm_new
+                    bdim=len(S)
+                    self.ket.AL[-1],self.ket.S,self.ket.BL[0]=Tensor(K1.reshape([K10.shape[0],hndim,bdim]),labels=K10.labels[:2]+K1.labels[-1:]),\
+                            S,Tensor(K2.reshape([bdim,hndim,K20.shape[2]]),labels=K2.labels[:1]+K20.labels[1:])
 
                     #update our contractions.
+                    #1. the left part
                     cket=self.ket.get(l-1,attach_S='B')
                     cbra=cket.conj()
-                    cbra.labels=['%s_%s'%(self.labels[2],l-1),'%s_%s'%(self.labels[0],l-1),'%s_%s'%(self.labels[2],l)]
+                    cbra.labels=[cket.labels[0].chstr('%s_%s'%(self.labels[2],l-1)),\
+                            cket.labels[1].chstr('%s_%s'%(self.labels[0],l-1)),\
+                            cket.labels[2].chstr('%s_%s'%(self.labels[2],l))]
                     self.LPART[l]=cbra*self.LPART[l-1]*self.H.get(l-1)*cket
 
-                    cket=self.ket.get(l,attach_S='B')
+                    #2. the right part
+                    cket=self.ket.get(l,attach_S='A')
                     cbra=cket.conj()
-                    cbra.labels=['%s_%s'%(self.labels[2],l),'%s_%s'%(self.labels[0],l),'%s_%s'%(self.labels[2],l+1)]
+                    cbra.labels=[cket.labels[0].chstr('%s_%s'%(self.labels[2],l)),\
+                            cket.labels[1].chstr('%s_%s'%(self.labels[0],l)),\
+                            cket.labels[2].chstr('%s_%s'%(self.labels[2],l+1))]
                     self.RPART[nsite-l]=cbra*self.RPART[nsite-l-1]*self.H.get(l)*cket
+                    t1=time.time()
 
                     #schedular check
                     elist.append(Emin)
-                    t1=time.time()
                     diff=Inf if len(elist)<=1 else elist[-1]-elist[-2]
-                    print 'Get Emin = %.12f, tol = %s, Elapse -> %s'%(Emin,diff,t1-t0)
+                    print 'Get Emin = %.12f, tol = %s, Elapse -> %s, %s states kept.'%(Emin,diff,t1-t0,len(S))
+                    print t01-t0,t02-t01,t1-t02
                     if iiter==endpoint[0] and direction==endpoint[1] and l==endpoint[2]:
                         print 'RUN COMPLETE!'
                         return Emin,self.ket
