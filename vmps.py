@@ -12,6 +12,8 @@ import time,pdb
 from rglib.mps import NORMAL_ORDER,Contraction,contract,Tensor,autoset_bms,svdbd,check_validity
 from blockmatrix import trunc_bm
 from pydavidson import JDh
+from tba.hgen import ind2c
+from flib.flib import fget_subblock
 
 __all__=['VMPSEngine']
 
@@ -146,7 +148,7 @@ class VMPSEngine(object):
         e,v=e[istate:istate+1],v[:,istate:istate+1]
         return e,v
 
-    def run(self,endpoint=(7,'->',1),maxN=50,tol=0):
+    def run(self,endpoint=(7,'->',1),maxN=50,tol=0,on_the_fly=True):
         '''
         Run this application.
 
@@ -154,6 +156,7 @@ class VMPSEngine(object):
             :maxiter: int, the maximum sweep iteration, one iteration is contains one left sweep, and one right sweep through the chain.
             :maxN: list/int, the maximum kept dimension.
             :tol: float, the tolerence.
+            :on_the_fly: bool, do not calculate the whole Hamiltonian if True.
 
         Return:
             (Emin, <MPS>)
@@ -185,42 +188,51 @@ class VMPSEngine(object):
                     FR=self.RPART[nsite-l-1]
                     O1,O2=self.H.get(l-1),self.H.get(l)
                     K10,K20=self.ket.get(l-1,attach_S='B'),self.ket.get(l,attach_S='B')
-                    ta=time.time()
-                    T=(FL*O1*O2*FR).chorder([0,2,4,6,1,3,5,7])
-                    tb=time.time()
-                    print 'COST A:',tb-ta
-                    dim=prod(T.shape[:4])
-                    dim_l,dim_r=prod(T.shape[:2]),prod(T.shape[2:4])
                     t00=time.time()
-                    T=T.merge_axes(slice(0,4),bmg=self.bmg,signs=[1,1,1,-1],return_pm=False,compact_form=False)
-                    T=T.merge_axes(slice(1,5),bmg=self.bmg,signs=[1,1,1,-1],return_pm=False,compact_form=False)
-                    t01=time.time()
-                    print 'COST B:',t01-t00
-                    #get the specific block for T, the `charge` neutral block
-                    #first, get the slice.
-                    bmd,pmd=T.labels[1].bm.compact_form()
-                    sls=bmd.get_slice(zeros(len(self.bmg.qstring),dtype='int32'),uselabel=True)
-                    indices=pmd[sls]
-                    #second, get the hamiltonian.
-                    Tc=T[indices][:,indices]
-                    Tc[abs(Tc)<ZERO_REF]=0
+                    #get Tc,indices
+                    if on_the_fly:
+                        #get bmd = c(l-1)-m(l-1)-m(l)-c(l+1)
+                        bms=[lb.bm for lb in K10.labels[:2]+K20.labels[-2:]]
+                        bmd,pmd=self.bmg.join_bms(bms,signs=[1,1,1,-1])
+                        #get the indices taken
+                        sls=bmd.get_slice(zeros(len(self.bmg.qstring),dtype='int32'),uselabel=True)
+                        indices=pmd[sls]
+                        #turn the indices into subindices.
+                        NN=array([bm.N for bm in bms])
+                        cinds=ind2c(indices,NN)
+                        #get the sub-block.
+                        Tc=fget_subblock(FL,O1,O2,FR,cinds)
+                    else:
+                        T=(FL*O1*O2*FR).chorder([0,2,4,6,1,3,5,7])
+                        dim=prod(T.shape[:4])
+                        T=T.merge_axes(slice(0,4),bmg=self.bmg,signs=[1,1,1,-1],return_pm=False,compact_form=False)
+                        T=T.merge_axes(slice(1,5),bmg=self.bmg,signs=[1,1,1,-1],return_pm=False,compact_form=False)
+                        #get the specific block for T, the `charge` neutral block
+                        #first, get the slice.
+                        bmd,pmd=T.labels[1].bm.compact_form()
+                        sls=bmd.get_slice(zeros(len(self.bmg.qstring),dtype='int32'),uselabel=True)
+                        indices=pmd[sls]
+                        #second, get the hamiltonian.
+                        Tc=T[indices][:,indices]
+                        Tc[abs(Tc)<ZERO_REF]=0
+                    t1=time.time()
 
                     #third, get the initial vector
                     K1K20=(K10*K20).merge_axes(slice(0,2),bmg=self.bmg,signs=[1,1],compact_form=False).merge_axes(slice(1,3),bmg=self.bmg,signs=[-1,1],compact_form=False)
                     v0=asarray((K1K20).ravel())
                     v0c=v0[indices]
-                    if DEBUG:
+                    if DEBUG and not on_the_fly:
                         Et=_evolve(self.H,self.ket)
                         E0=v0.dot(T.dot(v0))
                         print 'Checking for energy expectation! E(true)=%s, E(now)=%s'%(Et,E0)
                         assert(abs(Et-E0)<1e-8)
                     Emin,K1K2c=self._eigsh(csr_matrix(Tc),v0=v0c,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1)
-                    K1K2=zeros(dim,dtype='complex128')
+                    K1K2=zeros(bmd.N,dtype='complex128')
                     K1K2[indices]=K1K2c
-                    t02=time.time()
+                    t2=time.time()
 
                     #update our ket
-                    K1K2=Tensor(K1K2.reshape([dim_l,dim_r]),labels=K1K20.labels)
+                    K1K2=Tensor(K1K2.reshape([FL.shape[0]*hndim,FR.shape[0]*hndim]),labels=K1K20.labels)
                     #make it block diagonal
                     K1K2_block,pms=K1K2.b_reorder(return_pm=True)
                     #perform svd and roll back to original non-block structure
@@ -233,6 +245,8 @@ class VMPSEngine(object):
                         K1,S,K2=K1[:,kpmask],S[kpmask],K2[kpmask]
                         bm_new=trunc_bm(K2.labels[0].bm,kpmask=kpmask)
                         K2.labels[0].bm=K1.labels[1].bm=bm_new
+                    K1[abs(K1)<ZERO_REF]=0
+                    K2[abs(K2)<ZERO_REF]=0
                     bdim=len(S)
                     self.ket.AL[-1],self.ket.S,self.ket.BL[0]=Tensor(K1.reshape([K10.shape[0],hndim,bdim]),labels=K10.labels[:2]+K1.labels[-1:]),\
                             S,Tensor(K2.reshape([bdim,hndim,K20.shape[2]]),labels=K2.labels[:1]+K20.labels[1:])
@@ -253,13 +267,13 @@ class VMPSEngine(object):
                             cket.labels[1].chstr('%s_%s'%(self.labels[0],l)),\
                             cket.labels[2].chstr('%s_%s'%(self.labels[2],l+1))]
                     self.RPART[nsite-l]=cbra*self.RPART[nsite-l-1]*self.H.get(l)*cket
-                    t1=time.time()
+                    t3=time.time()
 
                     #schedular check
                     elist.append(Emin)
                     diff=Inf if len(elist)<=1 else elist[-1]-elist[-2]
-                    print 'Get Emin = %.12f, tol = %s, Elapse -> %s, %s states kept.'%(Emin,diff,t1-t0,len(S))
-                    print t01-t0,t02-t01,t1-t02
+                    print 'Get Emin = %.12f, tol = %s, Elapse -> %s, %s states kept.'%(Emin,diff,t3-t0,len(S))
+                    print 'Time: get Tc(%s), eigen(%s), svd(%s)'%(t1-t0,t2-t1,t3-t2)
                     if iiter==endpoint[0] and direction==endpoint[1] and l==endpoint[2]:
                         print 'RUN COMPLETE!'
                         return Emin,self.ket

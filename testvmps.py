@@ -90,7 +90,7 @@ class TestVMPS(object):
         #check the label setting is working properly
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N) for ai in vegn.ket.AL+vegn.ket.BL]))
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N,ai.labels[3].bm.N) for ai in vegn.H.matrix_form]))
-        vegn.run(maxN=50)
+        vegn.run(maxN=50,on_the_fly=True)
 
 if __name__=='__main__':
     TestVMPS().test_vmps()
