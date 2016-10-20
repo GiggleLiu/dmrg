@@ -6,18 +6,20 @@ from numpy import *
 from scipy.sparse.linalg import eigsh
 from scipy.linalg import eigh,svd,eigvalsh
 from numpy.linalg import norm
+from numpy import kron as dkron
 from matplotlib.pyplot import *
 import scipy.sparse as sps
 import copy,time,pdb,warnings,numbers
 
 from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker,svdb
-from tba.hgen import SpinSpaceConfig
-from rglib.mps import MPS,NORMAL_ORDER,SITE,LLINK,RLINK,chorder,OpString,tensor,is_commute
+from tba.hgen import SpinSpaceConfig,ind2c
+from rglib.mps import MPS,OpString,tensor
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
 from blockmatrix import SimpleBMG,sign4bm,show_bm,trunc_bm
 from disc_symm import SymmetryHandler
 from superblock import SuperBlock,site_image,joint_extract_block
 from pydavidson import JDh
+from flib.flib import fget_subblock_dmrg
 
 __all__=['site_image','SuperBlock','DMRGEngine','fix_tail']
 
@@ -65,22 +67,21 @@ def _gen_hamiltonian_block0(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
 def _gen_hamiltonian_block(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
     '''Get the combined hamiltonian for specific block.'''
     ndiml,ndimr=HL0.shape[0],HR0.shape[0]
-    bm_tot,jointinfo=blockinfo['bmg'].add(blockinfo['bml'],blockinfo['bmr'],return_info=True)
-    blockinfo['jointinfo']=jointinfo
-    blockinfo['bm_tot']=bm_tot
+    bm_tot,pm=blockinfo['bmg'].join_bms([blockinfo['bml'],blockinfo['bmr']])
+    pm=((blockinfo['pml']*ndimr)[:,newaxis]+blockinfo['pmr']).ravel()[pm]
+    indices=pm[bm_tot.get_slice(blockinfo['target_block'],uselabel=True)]
+    cinds=ind2c(indices,N=[ndiml,ndimr])
     t0=time.time()
-    H1=joint_extract_block(HL0,sps.identity(ndimr),lshift=0,**blockinfo)
-    H2=joint_extract_block(sps.identity(ndiml),HR0,lshift=0,pre=True,**blockinfo)
+    H1=fget_subblock_dmrg(hl=HL0.toarray(),hr=identity(ndimr),indices=cinds,is_identity=2)
+    H2=fget_subblock_dmrg(hl=identity(ndiml),hr=HR0.toarray(),indices=cinds,is_identity=1)
     Hc=H1+H2
     t1=time.time()
     sb=SuperBlock(hgen_l,hgen_r)
     for op in interop:
-        Hc=Hc+sb.get_op(op,blockinfo=blockinfo)
-    #print Hc.toarray()-Hc.toarray().conj().T
-    #print eigh(Hc.toarray())
+        Hc=Hc+sb.get_op(op,indices=cinds)
     t2=time.time()
     print 'Generate Hamiltonian %s, %s'%(t1-t0,t2-t1)
-    return Hc,bm_tot
+    return sps.csr_matrix(Hc),bm_tot,pm
 
 def _get_mps(hgen_l,hgen_r,phi,direction,labels):
     '''Combining hgen_l and hgen_r to get the matrix product state.'''
@@ -109,8 +110,8 @@ def _get_mps(hgen_l,hgen_r,phi,direction,labels):
     AL=hgen_l.evolutor.get_AL(dense=True)[:-1]+[A]
     BL=[B]+hgen_r.evolutor.get_AL(dense=True)[::-1][1:]
 
-    AL=[chorder(ai,target_order=MPS.order,old_order=[SITE,LLINK,RLINK]) for ai in AL]
-    BL=[chorder(bi,target_order=MPS.order,old_order=[SITE,RLINK,LLINK]).conj() for bi in BL]   #transpose
+    AL=[transpose(ai,axes=(1,0,2)) for ai in AL]
+    BL=[transpose(bi,axes=(1,0,2)).conj() for bi in BL]   #transpose
     mps=MPS(AL=AL,BL=BL,S=S,labels=labels,forder=range(NL)+range(NL,NL+NR)[::-1])
     return mps
 
@@ -502,8 +503,8 @@ class DMRGEngine(object):
             if isinstance(hgen_l.evolutor,MaskedEvolutor) and n>1:
                 kpmask_l=hgen_l.evolutor.kpmask(NL-2)     #kpmask is also related to block marker!!!
                 kpmask_r=hgen_r.evolutor.kpmask(NR-2)
-                bml,pml=self.bmg.update1(trunc_bm(hgen_l.block_marker,kpmask_l))
-                bmr,pmr=self.bmg.update1(trunc_bm(hgen_r.block_marker,kpmask_r))
+                bml,pml=self.bmg.update1(trunc_bm(hgen_l.block_marker or self.bmg.bm0,kpmask_l))
+                bmr,pmr=self.bmg.update1(trunc_bm(hgen_r.block_marker or self.bmg.bm0,kpmask_r))
             else:
                 bml,pml=self.bmg.update1(hgen_l.block_marker)
                 bmr,pmr=self.bmg.update1(hgen_r.block_marker)
@@ -514,7 +515,7 @@ class DMRGEngine(object):
         if target_block is None:
             Hc,bm_tot=_gen_hamiltonian_full(HL0,HR0,hgen_l,hgen_r,interop=interop),None
         else:
-            if maxN<100:    #efficiency cross over
+            if False:    #efficiency cross over
                 Hc,bm_tot,pm_tot=_gen_hamiltonian_block0(HL0,HR0,hgen_l=hgen_l,hgen_r=hgen_r,\
                         blockinfo=dict(bml=bml,bmr=bmr,pml=pml,pmr=pmr,bmg=self.bmg,target_block=target_block),interop=interop)
             else:
@@ -563,10 +564,9 @@ class DMRGEngine(object):
         t2=time.time()
         ##3. permute back eigen-vectors into original representation al,sl+1,sl+2,al+2
         if bm_tot is not None:
-            bindex=bm_tot._label_dict[tuple(target_block)]
-            vl=array([sps.coo_matrix((v[:,i],(arange(bm_tot.Nr[bindex],\
-                    bm_tot.Nr[bindex+1]),zeros(len(v)))),shape=(bm_tot.N,1),dtype='complex128').toarray()[argsort(pm_tot)].ravel()\
-                    for i in xrange(v.shape[-1])])
+            indices=pm_tot[bm_tot.get_slice(target_block,uselabel=True)]
+            vl=zeros([bm_tot.N,v.shape[1]],dtype=v.dtype)
+            vl[indices]=v; vl=vl.T
         else:
             vl=v.T
 
@@ -612,7 +612,7 @@ class DMRGEngine(object):
             def mapping_rule(bli):
                 res=self.bmg.bcast_sub([self.target_block],[bli])[0]
                 return tuple(res)
-            U,S,V,S2=svdb(phi,bm=bml,bm2=bmr,mapping_rule=mapping_rule,full_matrices=True);U2=V.T.conj()
+            U,S,V,S2=svdb(phi,bm=bml,bm2=bmr,mapping_rule=mapping_rule,full_matrices=True)
         else:
             U,S,V=svd(phi,full_matrices=True);U2=V.T.conj()
             if ndimr>=ndiml:
@@ -629,8 +629,11 @@ class DMRGEngine(object):
             if self.iprint==10 and not (bml.check_blockdiag(U.dot(sps.diags(spec_l,0)).dot(U.T.conj())) and\
                     bmr.check_blockdiag((V.T.conj().dot(sps.diags(spec_r,0))).dot(V))):
                 raise Exception('''Density matrix is not block diagonal, which is not expected,
-        1. make sure your are using additive good quantum numbers.
-        2. avoid ground state degeneracy.''')
+            1. make sure your are using additive good quantum numbers.
+            2. avoid ground state degeneracy.''')
+            #permute U and V
+            U,V=U.tocsr()[argsort(pml)],V.tocsc()[:,argsort(pmr)]
+            U2=V.T.conj()
         kpmasks=[]
         for Ui,spec in zip([U,U2],[spec_l,spec_r]):
             kpmask=zeros(Ui.shape[1],dtype='bool')
@@ -639,6 +642,7 @@ class DMRGEngine(object):
             trunc_error=sum(spec[~kpmask])
             kpmasks.append(kpmask)
         U,U2=_eliminate_zeros(U,ZERO_REF),_eliminate_zeros(U2,ZERO_REF)
+
         return U,(spec_l,spec_r),U2,kpmasks,trunc_error
 
     def rdm_analysis(self,phis,bml,bmr,side,maxN):

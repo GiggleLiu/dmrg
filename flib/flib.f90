@@ -31,7 +31,6 @@ subroutine fget_subblock(fl,o1,o2,fr,indices,res,nl,nr,nhl,nhc,nhr,hndim,ndim)
     !f2py intent(out) :: res
 
     !prepair datas
-    res=0
     do j=1,ndim
         !cache datas
         col_temp_fl=fl(:,:,indices(j,1)+1)
@@ -51,3 +50,92 @@ subroutine fget_subblock(fl,o1,o2,fr,indices,res,nl,nr,nhl,nhc,nhr,hndim,ndim)
         enddo
     enddo
 end subroutine fget_subblock
+
+
+subroutine fget_subblock2(fl,o1,o2,fr,indices,res,nl,nr,nhl,nhc,nhr,hndim,ndim)
+    implicit none
+    integer,intent(in) :: nl,nr,ndim,nhl,nhr,nhc,hndim
+    integer,intent(in) :: indices(ndim,4)
+    complex*16,intent(in) :: fl(nl,nhl,nl),fr(nr,nhr,nr),o1(nhl,hndim,hndim,nhc),o2(nhc,hndim,hndim,nhr)
+    complex*16,intent(out) :: res(ndim,ndim)
+    integer :: j,cind(4),i
+    complex*16 :: col_temp_fl(nl,nhl),col_temp_fr(nr,nhr),col_temp_o1(nhl,hndim,nhc),col_temp_o2(nhc,hndim,nhr),&
+        temp_left(nl*hndim*hndim,nhr),temp_center(nhl*hndim,hndim*nhr),temp(nl,hndim,hndim,nr)
+    
+    !f2py intent(in) :: fl,o1,o2,fr,indices,nl,nr,nhl,nhc,nhr,hndim,ndim
+    !f2py intent(out) :: res
+
+    !prepair datas
+    do j=1,ndim
+        !cache datas
+        col_temp_fl=fl(:,:,indices(j,1)+1)
+        col_temp_o1=o1(:,:,indices(j,2)+1,:)
+        col_temp_o2=o2(:,:,indices(j,3)+1,:)
+        col_temp_fr=fr(:,:,indices(j,4)+1)
+
+        !first, contract center blocks.
+        temp_center=matmul(reshape(col_temp_o1,[nhl*hndim,nhc]),reshape(col_temp_o2,[nhc,hndim*nhr]))
+        temp_left=reshape(matmul(col_temp_fl,reshape(temp_center,[nhl,hndim*hndim*nhr])),[nl*hndim*hndim,nhr])
+        !sencond, contract left blocks.
+        temp=reshape(matmul(temp_left,transpose(col_temp_fr)),[nl,hndim,hndim,nr])
+        do i=1,ndim
+            cind=indices(i,:)+1
+            res(i,j)=temp(cind(1),cind(2),cind(3),cind(4))
+        enddo
+    enddo
+end subroutine fget_subblock2
+
+
+!is_identity: 0 -> no, 1 -> left, 2 -> right
+subroutine fget_subblock_dmrg(hl,hr,indices,ndim,nl,nr,is_identity,res)
+    implicit none
+    integer,intent(in) :: indices(ndim,2),ndim,nl,nr,is_identity
+    complex*16,intent(in) :: hl(nl,nl),hr(nr,nr)
+    complex*16,intent(out) :: res(ndim,ndim)
+    integer :: i,j,il,ir,jl,jr
+    complex*16 :: temp_cl(nl),temp_cr(nr)
+    
+    !f2py intent(in) :: hl,hr,indices,ndim,nl,nr,is_identity
+    !f2py intent(out) :: res
+
+    if(is_identity==0) then
+        do j=1,ndim
+            jl=indices(j,1)+1
+            jr=indices(j,2)+1
+            temp_cl=hl(:,jl)
+            temp_cr=hr(:,jr)
+            do i=1,ndim
+                il=indices(i,1)+1
+                ir=indices(i,2)+1
+                res(i,j)=temp_cl(il)*temp_cr(ir)
+            enddo
+        enddo
+    else if(is_identity==1) then
+        do j=1,ndim
+            jl=indices(j,1)+1
+            jr=indices(j,2)+1
+            temp_cr=hr(:,jr)
+            do i=1,ndim
+                il=indices(i,1)+1
+                ir=indices(i,2)+1
+                if(il==jl) then
+                    res(i,j)=temp_cr(ir)
+                endif
+            enddo
+        enddo
+    else
+        do j=1,ndim
+            jl=indices(j,1)+1
+            jr=indices(j,2)+1
+            temp_cl=hl(:,jl)
+            do i=1,ndim
+                il=indices(i,1)+1
+                ir=indices(i,2)+1
+                if(ir==jr) then
+                    res(i,j)=temp_cl(il)
+                endif
+            enddo
+        enddo
+    endif
+end subroutine fget_subblock_dmrg
+

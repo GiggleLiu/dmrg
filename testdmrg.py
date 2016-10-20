@@ -137,7 +137,7 @@ class DMRGTest():
         maxiter=100
         model=self.get_model(maxiter+2,1)
         hgen=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='masked')
-        dmrgegn=DMRGEngine(hgen=hgen,tol=0,reflect=True)
+        dmrgegn=DMRGEngine(hgen=hgen,tol=0,reflect=True,iprint=10)
         dmrgegn.use_U1_symmetry('M',target_block=zeros(1))
         EG=dmrgegn.run_infinite(maxiter=maxiter,maxN=20,tol=0)[0]
         assert_almost_equal(EG,0.25-log(2),decimal=2)
@@ -147,7 +147,7 @@ class DMRGTest():
         model=self.get_model(10,1)
         hgen1=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='null')
         hgen2=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='normal')
-        dmrgegn=DMRGEngine(hgen=hgen1,tol=0)
+        dmrgegn=DMRGEngine(hgen=hgen1,tol=0,iprint=10)
         H=get_H(hgen=hgen1)
         H2,bm2=get_H_bm(hgen=hgen2,bstr='M')
         Emin=eigsh(H,k=1)[0]

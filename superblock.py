@@ -11,6 +11,7 @@ import copy,time,pdb,warnings
 from rglib.hexpand import Z4scfg,kron
 from rglib.mps import OpString,OpUnit,OpCollection
 from blockmatrix import get_lshift1
+from flib.flib import fget_subblock_dmrg
 
 __all__=['site_image','joint_extract_block','SuperBlock']
 
@@ -174,7 +175,7 @@ class SuperBlock(object):
         NL,NR=self.hl.N,self.hr.N
         return site_image(ops,NL,NR)
 
-    def get_op_onlink(self,ouA,ouB,blockinfo=None):
+    def get_op_onlink(self,ouA,ouB,indices=None):
         '''
         Get the operator on the link.
         
@@ -209,24 +210,22 @@ class SuperBlock(object):
             else:
                 mA=kron(sps.identity(ndiml0),ouA.get_data(dense=False))
                 mB=kron(ouB.get_data(dense=False),sps.identity(ndimr0))
-        if blockinfo is None:
+        if indices is None:
             op=kron(mA,mB)
         else:
-            bmg=blockinfo['bmg']
-            lshift=get_lshift1(bmg,ouA.data)
-            op=joint_extract_block(mA,mB,pre=True,lshift=lshift,**blockinfo)
+            op=fget_subblock_dmrg(hl=mA,hr=mB,indices=indices,is_identity=0)
         return op
 
-    def get_op(self,opstring,blockinfo=None):
+    def get_op(self,opstring,indices=None):
         '''
         Get specific operator.
         '''
         if self.order=='A.B.':
-            return self._get_op_AdBd(opstring,blockinfo=blockinfo)
+            return self._get_op_AdBd(opstring,indices=indices)
         else:
-            return self._get_op_AddB(opstring,blockinfo=blockinfo)
+            return self._get_op_AddB(opstring,indices=indices)
 
-    def _get_op_AdBd(self,opstring,blockinfo):
+    def _get_op_AdBd(self,opstring,indices):
         '''
         Get the hamiltonian from a opstring instance.
 
@@ -259,7 +258,7 @@ class SuperBlock(object):
             #handle the fermionic link.
             if nll!=0 or nrr!=0:
                 raise NotImplementedError('Only nearest neighbor term is allowed for fermionic links!')
-            return self.get_op_onlink(op_ls[0],op_rs[0],blockinfo=blockinfo)
+            return self.get_op_onlink(op_ls[0],op_rs[0],indices=indices)
 
         datas=[]
         for hgen,opn,op1,NN in [(self.hl,op_ll,op_ls,NL),(self.hr,op_rr,op_rs,NR)]:
@@ -287,7 +286,10 @@ class SuperBlock(object):
             else:
                 data=data_n.dot(data_1)
             datas.append(data)
-        return kron(datas[0],datas[1])
+        if indices is None:
+            return kron(datas[0],datas[1])
+        else:
+            return fget_subblock_dmrg(hl=datas[0].toarray(),hr=datas[1].toarray(),indices=indices,is_identity=0)
 
 
     def _get_op_AddB(self,opstring):

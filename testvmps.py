@@ -83,14 +83,14 @@ class TestVMPS(object):
         spaceconfig=SpinSpaceConfig([2,1])
         bmg=SimpleBMG(spaceconfig=spaceconfig,qstring='M')
         #k0=product_state(config=random.randint(0,2,nsite),hndim=2)
-        k0=product_state(config=repeat([0,1],nsite/2),hndim=2)
+        k0=product_state(config=repeat([0,1],nsite/2),hndim=2,bmg=bmg)
 
         #setting up the engine
-        vegn=VMPSEngine(H=model.H,k0=k0,bmg=bmg)
+        vegn=VMPSEngine(H=model.H.use_bm(bmg),k0=k0,eigen_solver='LC')
         #check the label setting is working properly
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N) for ai in vegn.ket.AL+vegn.ket.BL]))
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N,ai.labels[3].bm.N) for ai in vegn.H.matrix_form]))
-        vegn.run(maxN=50,on_the_fly=True)
+        vegn.run(maxN=20,on_the_fly=True,which='SA')
 
 if __name__=='__main__':
     TestVMPS().test_vmps()

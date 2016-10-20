@@ -9,11 +9,11 @@ from scipy.sparse import csr_matrix,coo_matrix
 from matplotlib.pyplot import *
 import time,pdb
 
-from rglib.mps import NORMAL_ORDER,Contraction,contract,Tensor,autoset_bms,svdbd,check_validity
+from rglib.mps import Contraction,contract,Tensor,svdbd,check_validity_mps
 from blockmatrix import trunc_bm
 from pydavidson import JDh
 from tba.hgen import ind2c
-from flib.flib import fget_subblock
+from flib.flib import fget_subblock,fget_subblock2
 
 __all__=['VMPSEngine']
 
@@ -50,10 +50,9 @@ class VMPSEngine(object):
             *'JD', Jacobi-Davidson method.
             *'LC', Lanczos, method.
     '''
-    def __init__(self,H,k0,labels=['s','m','a','b','c'],eigen_solver='JD',bmg=None):
+    def __init__(self,H,k0,labels=['s','m','a','b','c'],eigen_solver='JD'):
         self.H=H
         self.eigen_solver=eigen_solver
-        self.bmg=bmg
         #set up initial ket
         self.ket=k0
         self.ket<<self.ket.l-1  #right normalize the ket to the first bond, where we start our update
@@ -63,11 +62,6 @@ class VMPSEngine(object):
         self.labels=labels
         self.ket.chlabel([labels[1],labels[4]])
         self.H.chlabel([labels[0],labels[1],labels[3]])
-
-        #setup block markers.
-        if bmg is not None:
-            autoset_bms(self.ket,bmg)
-            autoset_bms(self.H,bmg)
 
         #initial contractions, fill the RPART(because we will start our update from left end)
         bra=self.ket.tobra(labels=[labels[0],labels[2]],sharedata=True)  #do not deepcopy the data
@@ -84,14 +78,21 @@ class VMPSEngine(object):
             FR=cbra*FR*ch*cket
             self.RPART[i+1]=FR
 
-    def _eigsh(self,H,v0,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1,iprint=0):
+    def _eigsh(self,H,v0,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1,iprint=0,which='SA'):
         '''
         solve eigenvalue problem.
         '''
         maxiter=5000
         N=H.shape[0]
-        if iprint==10 and projector is not None and check_commute:
+        if iprint==10 and projector is not None:
             assert(is_commute(H,projector))
+        if which=='SL':
+            E,V=eigh(H)
+            #get the eigenvector with maximum overlap
+            overlap=reshape(v0,[1,-1]).dot(V).ravel()
+            ind=argmax(overlap)
+            print 'Overlap = %s'%overlap[ind]
+            return E[ind],V[:,ind:ind+1]
         if self.eigen_solver=='LC':
             k=max(lc_search_space,k)
             if H.shape[0]<100:
@@ -148,7 +149,7 @@ class VMPSEngine(object):
         e,v=e[istate:istate+1],v[:,istate:istate+1]
         return e,v
 
-    def run(self,endpoint=(7,'->',1),maxN=50,tol=0,on_the_fly=True):
+    def run(self,endpoint=(7,'->',1),maxN=50,tol=0,on_the_fly=True,which='SL'):
         '''
         Run this application.
 
@@ -157,6 +158,7 @@ class VMPSEngine(object):
             :maxN: list/int, the maximum kept dimension.
             :tol: float, the tolerence.
             :on_the_fly: bool, do not calculate the whole Hamiltonian if True.
+            :which: str, string that specify the <MPS> desired, 'SL'(most similar to k0) or 'SA'(smallest)
 
         Return:
             (Emin, <MPS>)
@@ -165,6 +167,7 @@ class VMPSEngine(object):
         maxiter=endpoint[0]+1
         nsite=self.ket.nsite
         hndim=self.ket.hndim
+        bmg=self.ket.bmg if hasattr(self.ket,'bmg') else None
         if isinstance(maxN,int): maxN=[maxN]*maxiter
         if endpoint[1]=='->':
             assert(endpoint[2]>=1 and endpoint[2]<nsite)
@@ -193,24 +196,24 @@ class VMPSEngine(object):
                     if on_the_fly:
                         #get bmd = c(l-1)-m(l-1)-m(l)-c(l+1)
                         bms=[lb.bm for lb in K10.labels[:2]+K20.labels[-2:]]
-                        bmd,pmd=self.bmg.join_bms(bms,signs=[1,1,1,-1])
+                        bmd,pmd=bmg.join_bms(bms,signs=[1,1,1,-1])
                         #get the indices taken
-                        sls=bmd.get_slice(zeros(len(self.bmg.qstring),dtype='int32'),uselabel=True)
+                        sls=bmd.get_slice(zeros(len(bmg.qstring),dtype='int32'),uselabel=True)
                         indices=pmd[sls]
                         #turn the indices into subindices.
                         NN=array([bm.N for bm in bms])
                         cinds=ind2c(indices,NN)
                         #get the sub-block.
-                        Tc=fget_subblock(FL,O1,O2,FR,cinds)
+                        Tc=fget_subblock2(FL,O1,O2,FR,cinds)
                     else:
                         T=(FL*O1*O2*FR).chorder([0,2,4,6,1,3,5,7])
                         dim=prod(T.shape[:4])
-                        T=T.merge_axes(slice(0,4),bmg=self.bmg,signs=[1,1,1,-1],return_pm=False,compact_form=False)
-                        T=T.merge_axes(slice(1,5),bmg=self.bmg,signs=[1,1,1,-1],return_pm=False,compact_form=False)
+                        T=T.merge_axes(slice(0,4),bmg=bmg,signs=[1,1,1,-1],return_pm=False,compact_form=False)
+                        T=T.merge_axes(slice(1,5),bmg=bmg,signs=[1,1,1,-1],return_pm=False,compact_form=False)
                         #get the specific block for T, the `charge` neutral block
                         #first, get the slice.
                         bmd,pmd=T.labels[1].bm.compact_form()
-                        sls=bmd.get_slice(zeros(len(self.bmg.qstring),dtype='int32'),uselabel=True)
+                        sls=bmd.get_slice(zeros(len(bmg.qstring),dtype='int32'),uselabel=True)
                         indices=pmd[sls]
                         #second, get the hamiltonian.
                         Tc=T[indices][:,indices]
@@ -218,7 +221,7 @@ class VMPSEngine(object):
                     t1=time.time()
 
                     #third, get the initial vector
-                    K1K20=(K10*K20).merge_axes(slice(0,2),bmg=self.bmg,signs=[1,1],compact_form=False).merge_axes(slice(1,3),bmg=self.bmg,signs=[-1,1],compact_form=False)
+                    K1K20=(K10*K20).merge_axes(slice(0,2),bmg=bmg,signs=[1,1],compact_form=False).merge_axes(slice(1,3),bmg=bmg,signs=[-1,1],compact_form=False)
                     v0=asarray((K1K20).ravel())
                     v0c=v0[indices]
                     if DEBUG and not on_the_fly:
@@ -226,7 +229,12 @@ class VMPSEngine(object):
                         E0=v0.dot(T.dot(v0))
                         print 'Checking for energy expectation! E(true)=%s, E(now)=%s'%(Et,E0)
                         assert(abs(Et-E0)<1e-8)
-                    Emin,K1K2c=self._eigsh(csr_matrix(Tc),v0=v0c,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1)
+                    if which=='SA':
+                        Emin,K1K2c=self._eigsh(csr_matrix(Tc),v0=v0c,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1)
+                    elif which=='SL':
+                        Emin,K1K2c=self._eigsh(Tc,v0=v0c,which='SL')
+                    else:
+                        raise ValueError()
                     K1K2=zeros(bmd.N,dtype='complex128')
                     K1K2[indices]=K1K2c
                     t2=time.time()
