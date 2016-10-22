@@ -13,7 +13,7 @@ import copy,time,pdb,warnings,numbers
 
 from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker,svdb
 from tba.hgen import SpinSpaceConfig,ind2c
-from rglib.mps import MPS,OpString,tensor
+from rglib.mps import MPS,OpString,tensor,insert_Zs
 from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
 from blockmatrix import SimpleBMG,sign4bm,show_bm,trunc_bm
 from disc_symm import SymmetryHandler
@@ -23,7 +23,7 @@ from flib.flib import fget_subblock_dmrg
 
 __all__=['site_image','SuperBlock','DMRGEngine','fix_tail']
 
-ZERO_REF=1e-10
+ZERO_REF=1e-12
 
 def _eliminate_zeros(A,zero_ref):
     '''eliminate zeros from a sparse matrix.'''
@@ -264,13 +264,13 @@ class DMRGEngine(object):
         #and use site image to create a reversed ordering!
         hgen_l=copy.deepcopy(self.hgen)
         if not isinstance(hgen_l.spaceconfig,SpinSpaceConfig):
-            hgen_l.evolutees['H'].opc.insert_Zs(spaceconfig=hgen_l.spaceconfig)
+            insert_Zs(hgen_l.evolutees['H'].opc,spaceconfig=hgen_l.spaceconfig)
         self.LPART={0:hgen_l}
         if not self.reflect:
             hgen_r=copy.deepcopy(self.hgen)
             hgen_r.evolutees['H'].opc=site_image(hgen_r.evolutees['H'].opc,NL=0,NR=hgen_r.nsite,care_sign=True)
             if not isinstance(hgen_l.spaceconfig,SpinSpaceConfig):
-                hgen_r.evolutees['H'].opc.insert_Zs(spaceconfig=hgen_r.spaceconfig)
+                insert_Zs(hgen_r.evolutees['H'].opc,spaceconfig=hgen_r.spaceconfig)
             self.RPART={0:hgen_r}
 
     def use_disc_symmetry(self,target_sector,detect_scope=2):
@@ -532,7 +532,7 @@ class DMRGEngine(object):
                 #2. NL==NR, reflection is not used(and not the first iteration).
                 self.symm_handler.update_handlers(OPL=OPL,OPR=OPR,useC=False)
             else:
-                nl=bml.antiblockize(int32(1-sign4bm(bml,self.bmg,nsite=hgen_l.N+hgen_r.N,diag_only=True))/2)
+                nl=(int32(1-sign4bm(bml,self.bmg,diag_only=True))/2)[argsort(pml)]
                 self.symm_handler.update_handlers(OPL=OPL,OPR=OPR,n=nl,useC=True)
             v00=self.symm_handler.project_state(phi=initial_state)
             if self.iprint==10:assert(self.symm_handler.check_op(H))
@@ -548,7 +548,7 @@ class DMRGEngine(object):
             indices=pm_tot[bm_tot.get_slice(target_block,uselabel=True)]
             v0=v00[indices]
             if projector is not None:
-                projector=bm_tot.extract_block_pre(projector,(target_block,target_block),uselabel=True)
+                projector=projector[indices]
 
         ##2. diagonalize to get desired number of levels
         detect_C2=self.symm_handler.target_sector.has_key('C')# and not symm_handler.useC

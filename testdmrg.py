@@ -8,7 +8,7 @@ from scipy.sparse.linalg import eigsh
 import pdb,time,copy
 
 from tba.hgen import SpinSpaceConfig
-from rglib.mps import MPO,OpUnitI,opunit_Sz,opunit_Sp,opunit_Sm,opunit_Sx,opunit_Sy,MPS
+from rglib.mps import WL2OPC,OpUnitI,opunit_Sz,opunit_Sp,opunit_Sm,opunit_Sx,opunit_Sy,MPS
 from rglib.hexpand import RGHGen
 from rglib.hexpand import MaskedEvolutor,NullEvolutor,Evolutor
 from dmrg import DMRGEngine
@@ -44,10 +44,7 @@ class HeisenbergModel(object):
         WL=[copy.deepcopy(wi) for i in xrange(nsite)]
         WL[0]=WL[0][4:]
         WL[-1]=WL[-1][:,:1]
-        self.H=MPO(WL)
-        mpc=self.H.serialize()
-        mpc.compactify()
-        self.H_serial=mpc
+        self.H_serial=WL2OPC(WL)
 
 class HeisenbergModel2(object):
     '''
@@ -129,7 +126,7 @@ class DMRGTest():
         EG1=eigsh(H,k=1,which='SA')[0]
         dmrgegn=DMRGEngine(hgen=hgen2,tol=0,reflect=True)
         dmrgegn.use_U1_symmetry('M',target_block=zeros(1))
-        EG2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,30,40,40],tol=0)[0]
+        EG2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,20,40,40,40],tol=0)[0]
         assert_almost_equal(EG1,EG2,decimal=4)
 
     def test_dmrg_infinite(self):
@@ -155,6 +152,6 @@ class DMRGTest():
         print 'The Ground State Energy is %s, tolerence %s.'%(Emin,Emin-Emin2)
         assert_almost_equal(Emin,Emin2)
 
-DMRGTest().test_lanczos()
 DMRGTest().test_dmrg_finite()
+DMRGTest().test_lanczos()
 DMRGTest().test_dmrg_infinite()

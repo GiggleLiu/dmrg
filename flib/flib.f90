@@ -17,7 +17,7 @@
 !Return:
 !--------------------------
 !res: matrix,
-subroutine fget_subblock(fl,o1,o2,fr,indices,res,nl,nr,nhl,nhc,nhr,hndim,ndim)
+subroutine fget_subblock2a(fl,o1,o2,fr,indices,res,nl,nr,nhl,nhc,nhr,hndim,ndim)
     implicit none
     integer,intent(in) :: nl,nr,ndim,nhl,nhr,nhc,hndim
     integer,intent(in) :: indices(ndim,4)
@@ -49,10 +49,10 @@ subroutine fget_subblock(fl,o1,o2,fr,indices,res,nl,nr,nhl,nhc,nhr,hndim,ndim)
             res(i,j)=sum(temp_c2(1,:)*temp_fr)
         enddo
     enddo
-end subroutine fget_subblock
+end subroutine fget_subblock2a
 
 
-subroutine fget_subblock2(fl,o1,o2,fr,indices,res,nl,nr,nhl,nhc,nhr,hndim,ndim)
+subroutine fget_subblock2b(fl,o1,o2,fr,indices,res,nl,nr,nhl,nhc,nhr,hndim,ndim)
     implicit none
     integer,intent(in) :: nl,nr,ndim,nhl,nhr,nhc,hndim
     integer,intent(in) :: indices(ndim,4)
@@ -83,7 +83,7 @@ subroutine fget_subblock2(fl,o1,o2,fr,indices,res,nl,nr,nhl,nhc,nhr,hndim,ndim)
             res(i,j)=temp(cind(1),cind(2),cind(3),cind(4))
         enddo
     enddo
-end subroutine fget_subblock2
+end subroutine fget_subblock2b
 
 
 !is_identity: 0 -> no, 1 -> left, 2 -> right
@@ -138,4 +138,35 @@ subroutine fget_subblock_dmrg(hl,hr,indices,ndim,nl,nr,is_identity,res)
         enddo
     endif
 end subroutine fget_subblock_dmrg
+
+subroutine fget_subblock1(fl,o1,fr,indices,res,nl,nr,nhl,nhr,hndim,ndim)
+    implicit none
+    integer,intent(in) :: nl,nr,ndim,nhl,nhr,hndim
+    integer,intent(in) :: indices(ndim,3)
+    complex*16,intent(in) :: fl(nl,nhl,nl),fr(nr,nhr,nr),o1(nhl,hndim,hndim,nhr)
+    complex*16,intent(out) :: res(ndim,ndim)
+    integer :: j,cind(3),i
+    complex*16 :: col_temp_fl(nl,nhl),col_temp_fr(nr,nhr),col_temp_o1(nhl,hndim,nhr),&
+        temp_left(nl*hndim,nhr),temp(nl,hndim,nr)
+    
+    !f2py intent(in) :: fl,o1,o2,fr,indices,nl,nr,nhl,nhr,hndim,ndim
+    !f2py intent(out) :: res
+
+    !prepair datas
+    do j=1,ndim
+        !cache datas
+        col_temp_fl=fl(:,:,indices(j,1)+1)
+        col_temp_o1=o1(:,:,indices(j,2)+1,:)
+        col_temp_fr=fr(:,:,indices(j,3)+1)
+
+        !first, contract center blocks.
+        temp_left=reshape(matmul(col_temp_fl,reshape(col_temp_o1,[nhl,hndim*nhr])),[nl*hndim,nhr])
+        !sencond, contract left blocks.
+        temp=reshape(matmul(temp_left,transpose(col_temp_fr)),[nl,hndim,nr])
+        do i=1,ndim
+            cind=indices(i,:)+1
+            res(i,j)=temp(cind(1),cind(2),cind(3))
+        enddo
+    enddo
+end subroutine fget_subblock1
 

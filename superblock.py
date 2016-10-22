@@ -213,7 +213,7 @@ class SuperBlock(object):
         if indices is None:
             op=kron(mA,mB)
         else:
-            op=fget_subblock_dmrg(hl=mA,hr=mB,indices=indices,is_identity=0)
+            op=fget_subblock_dmrg(hl=mA.toarray(),hr=mB.toarray(),indices=indices,is_identity=0)
         return op
 
     def get_op(self,opstring,indices=None):

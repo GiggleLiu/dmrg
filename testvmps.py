@@ -5,7 +5,7 @@ from scipy.sparse.linalg import eigsh
 import pdb,time,copy
 
 from tba.hgen import SpinSpaceConfig
-from rglib.mps import MPO,OpUnitI,opunit_Sz,opunit_Sp,opunit_Sm,opunit_Sx,opunit_Sy,MPS,product_state,random_product_state
+from rglib.mps import WL2MPO,OpUnitI,opunit_Sz,opunit_Sp,opunit_Sm,opunit_Sx,opunit_Sy,MPS,product_state,random_product_state,WL2OPC
 from rglib.hexpand import RGHGen
 from rglib.hexpand import MaskedEvolutor,NullEvolutor,Evolutor
 from dmrg import DMRGEngine
@@ -44,8 +44,8 @@ class HeisenbergModel():
         WL=[copy.deepcopy(wi) for i in xrange(nsite)]
         WL[0]=WL[0][4:]
         WL[-1]=WL[-1][:,:1]
-        self.H=MPO(WL)
-        mpc=self.H.serialize()
+        self.H=WL2MPO(WL)
+        mpc=WL2OPC(WL)
         mpc.compactify()
         self.H_serial=mpc
 
@@ -74,7 +74,7 @@ class TestVMPS(object):
         '''
         Run vMPS for Heisenberg model.
         '''
-        nsite=20
+        nsite=10
         model=self.get_model(nsite)
         #EG,mps=self.dmrgrun(model)
 
@@ -86,11 +86,12 @@ class TestVMPS(object):
         k0=product_state(config=repeat([0,1],nsite/2),hndim=2,bmg=bmg)
 
         #setting up the engine
-        vegn=VMPSEngine(H=model.H.use_bm(bmg),k0=k0,eigen_solver='LC')
+        vegn=VMPSEngine(H=model.H.use_bm(bmg),k0=k0,eigen_solver='JD')
         #check the label setting is working properly
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N) for ai in vegn.ket.AL+vegn.ket.BL]))
-        assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N,ai.labels[3].bm.N) for ai in vegn.H.matrix_form]))
-        vegn.run(maxN=20,on_the_fly=True,which='SA')
+        assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N,ai.labels[3].bm.N) for ai in vegn.H.OL]))
+        vegn.run(maxN=100,which='SA',nsite_update=2,endpoint=(3,'->',0))
+        vegn.run(maxN=100,which='SA',nsite_update=1,endpoint=(3,'->',0))
 
 if __name__=='__main__':
     TestVMPS().test_vmps()

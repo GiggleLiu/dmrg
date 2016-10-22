@@ -9,11 +9,11 @@ from scipy.sparse import csr_matrix,coo_matrix
 from matplotlib.pyplot import *
 import time,pdb
 
-from rglib.mps import Contraction,contract,Tensor,svdbd,check_validity_mps
+from rglib.mps import Contraction,contract,Tensor,svdbd,check_validity_mps,BLabel
 from blockmatrix import trunc_bm
 from pydavidson import JDh
 from tba.hgen import ind2c
-from flib.flib import fget_subblock,fget_subblock2
+from flib.flib import fget_subblock2a,fget_subblock2b,fget_subblock1
 
 __all__=['VMPSEngine']
 
@@ -71,7 +71,7 @@ class VMPSEngine(object):
         FR=Tensor(ones([1,1,1]),labels=[bra.get(nsite-1).labels[-1],self.H.get(nsite-1).labels[-1],self.ket.get(nsite-1).labels[-1]])
         self.LPART={0:FL}
         self.RPART={0:FR}
-        for i in xrange(nsite-2):
+        for i in xrange(nsite-1):
             cbra=bra.get(nsite-i-1,attach_S='B')
             cket=self.ket.get(nsite-i-1,attach_S='B')
             ch=self.H.get(nsite-i-1)
@@ -149,7 +149,7 @@ class VMPSEngine(object):
         e,v=e[istate:istate+1],v[:,istate:istate+1]
         return e,v
 
-    def run(self,endpoint=(7,'->',1),maxN=50,tol=0,on_the_fly=True,which='SL'):
+    def run(self,endpoint=(7,'->',0),maxN=50,tol=0,which='SL',nsite_update=2):
         '''
         Run this application.
 
@@ -157,8 +157,8 @@ class VMPSEngine(object):
             :maxiter: int, the maximum sweep iteration, one iteration is contains one left sweep, and one right sweep through the chain.
             :maxN: list/int, the maximum kept dimension.
             :tol: float, the tolerence.
-            :on_the_fly: bool, do not calculate the whole Hamiltonian if True.
             :which: str, string that specify the <MPS> desired, 'SL'(most similar to k0) or 'SA'(smallest)
+            :nsite_update: int, the sites updated one time.
 
         Return:
             (Emin, <MPS>)
@@ -170,118 +170,119 @@ class VMPSEngine(object):
         bmg=self.ket.bmg if hasattr(self.ket,'bmg') else None
         if isinstance(maxN,int): maxN=[maxN]*maxiter
         if endpoint[1]=='->':
-            assert(endpoint[2]>=1 and endpoint[2]<nsite)
+            assert(endpoint[2]>=0 and endpoint[2]<nsite-nsite_update)
         elif endpoint[1]=='<-':
-            assert(endpoint[2]>=2 and endpoint[2]<nsite-1)
+            assert(endpoint[2]>0 and endpoint[2]<=nsite-nsite_update)
         else:
             raise ValueError()
 
         elist=[]
         for iiter in xrange(maxiter):
             print '########### STARTING NEW ITERATION %s ################'%iiter
-            for direction,iterator in zip(['->','<-'],[xrange(1,nsite),xrange(nsite-2,1,-1)]):
-                for l in iterator:   #l is the center(of two site) bond.
+            for direction,iterator in zip(['->','<-'],[xrange(nsite-nsite_update),xrange(nsite-nsite_update,0,-1)]):
+                for l in iterator:   #l is the index of first site.
                     print 'Running iter = %s, direction = %s, l = %s'%(iiter,direction,l)
-                    print 'A'*(l-1)+'..'+'B'*(nsite-l-1)
+                    print 'A'*(l)+'.'*nsite_update+'B'*(nsite-l-nsite_update)
                     t0=time.time()
 
                     #construct the Tensor for Hamilonian
                     self.ket>>l-self.ket.l
-                    FL=self.LPART[l-1]
-                    FR=self.RPART[nsite-l-1]
-                    O1,O2=self.H.get(l-1),self.H.get(l)
-                    K10,K20=self.ket.get(l-1,attach_S='B'),self.ket.get(l,attach_S='B')
+                    FL=self.LPART[l]
+                    FR=self.RPART[nsite-l-nsite_update]
+                    Os=[self.H.get(li) for li in xrange(l,l+nsite_update)]
+                    K0s=[self.ket.get(li,attach_S='B') for li in xrange(l,l+nsite_update)]
                     t00=time.time()
                     #get Tc,indices
-                    if on_the_fly:
-                        #get bmd = c(l-1)-m(l-1)-m(l)-c(l+1)
-                        bms=[lb.bm for lb in K10.labels[:2]+K20.labels[-2:]]
-                        bmd,pmd=bmg.join_bms(bms,signs=[1,1,1,-1])
-                        #get the indices taken
-                        sls=bmd.get_slice(zeros(len(bmg.qstring),dtype='int32'),uselabel=True)
-                        indices=pmd[sls]
-                        #turn the indices into subindices.
-                        NN=array([bm.N for bm in bms])
-                        cinds=ind2c(indices,NN)
-                        #get the sub-block.
-                        Tc=fget_subblock2(FL,O1,O2,FR,cinds)
-                    else:
-                        T=(FL*O1*O2*FR).chorder([0,2,4,6,1,3,5,7])
-                        dim=prod(T.shape[:4])
-                        T=T.merge_axes(slice(0,4),bmg=bmg,signs=[1,1,1,-1],return_pm=False,compact_form=False)
-                        T=T.merge_axes(slice(1,5),bmg=bmg,signs=[1,1,1,-1],return_pm=False,compact_form=False)
-                        #get the specific block for T, the `charge` neutral block
-                        #first, get the slice.
-                        bmd,pmd=T.labels[1].bm.compact_form()
-                        sls=bmd.get_slice(zeros(len(bmg.qstring),dtype='int32'),uselabel=True)
-                        indices=pmd[sls]
-                        #second, get the hamiltonian.
-                        Tc=T[indices][:,indices]
-                        Tc[abs(Tc)<ZERO_REF]=0
+                    #get bmd = c(l-1)-m(l-1)-m(l)-c(l+1)
+                    bms=[lb.bm for lb in K0s[0].labels[:1]+[K.labels[1] for K in K0s]+K0s[-1].labels[-1:]]
+                    bmd,pmd=bmg.join_bms(bms,signs=[1]+[1]*nsite_update+[-1])
+                    #get the indices taken
+                    sls=bmd.get_slice(zeros(len(bmg.qstring),dtype='int32'),uselabel=True)
+                    indices=pmd[sls]
+                    #turn the indices into subindices.
+                    NN=array([bm.N for bm in bms])
+                    cinds=ind2c(indices,NN)
+                    #get the sub-block.
+                    if nsite_update==2:
+                        Tc=fget_subblock2b(FL,Os[0],Os[1],FR,cinds)
+                    elif nsite_update==1:
+                        Tc=fget_subblock1(FL,Os[0],FR,cinds)
                     t1=time.time()
 
                     #third, get the initial vector
-                    K1K20=(K10*K20).merge_axes(slice(0,2),bmg=bmg,signs=[1,1],compact_form=False).merge_axes(slice(1,3),bmg=bmg,signs=[-1,1],compact_form=False)
-                    v0=asarray((K1K20).ravel())
+                    V0=reduce(lambda x,y:x*y,K0s)
+                    v0=asarray(V0.ravel())
                     v0c=v0[indices]
-                    if DEBUG and not on_the_fly:
-                        Et=_evolve(self.H,self.ket)
-                        E0=v0.dot(T.dot(v0))
-                        print 'Checking for energy expectation! E(true)=%s, E(now)=%s'%(Et,E0)
-                        assert(abs(Et-E0)<1e-8)
                     if which=='SA':
-                        Emin,K1K2c=self._eigsh(csr_matrix(Tc),v0=v0c,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1)
+                        Emin,Vc=self._eigsh(csr_matrix(Tc),v0=v0c,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1)
                     elif which=='SL':
-                        Emin,K1K2c=self._eigsh(Tc,v0=v0c,which='SL')
+                        Emin,Vc=self._eigsh(Tc,v0=v0c,which='SL')
                     else:
                         raise ValueError()
-                    K1K2=zeros(bmd.N,dtype='complex128')
-                    K1K2[indices]=K1K2c
+                    V=zeros(bmd.N,dtype='complex128')
+                    V[indices]=Vc
+                    overlap=v0.dot(V)
                     t2=time.time()
 
-                    #update our ket
-                    K1K2=Tensor(K1K2.reshape([FL.shape[0]*hndim,FR.shape[0]*hndim]),labels=K1K20.labels)
-                    #make it block diagonal
-                    K1K2_block,pms=K1K2.b_reorder(return_pm=True)
-                    #perform svd and roll back to original non-block structure
-                    K1,S,K2=svdbd(K1K2_block,cbond_str='%s_%s'%(self.labels[-1],l))
-                    K1,K2=K1[argsort(pms[0])],K2[:,argsort(pms[1])]
-                    #do the truncation
-                    if len(S)>maxN[iiter]:
-                        Smin=sort(S)[-maxN[iiter]]
-                        kpmask=S>=Smin
-                        K1,S,K2=K1[:,kpmask],S[kpmask],K2[kpmask]
-                        bm_new=trunc_bm(K2.labels[0].bm,kpmask=kpmask)
-                        K2.labels[0].bm=K1.labels[1].bm=bm_new
-                    K1[abs(K1)<ZERO_REF]=0
-                    K2[abs(K2)<ZERO_REF]=0
-                    bdim=len(S)
-                    self.ket.AL[-1],self.ket.S,self.ket.BL[0]=Tensor(K1.reshape([K10.shape[0],hndim,bdim]),labels=K10.labels[:2]+K1.labels[-1:]),\
-                            S,Tensor(K2.reshape([bdim,hndim,K20.shape[2]]),labels=K2.labels[:1]+K20.labels[1:])
+                    #update our ket,
+                    if nsite_update==2:
+                        #if 2 site update, perform svd and truncate.
+                        #first, find the block structure and make it block diagonal
+                        bml=bmg.join_bms([V0.labels[0].bm,V0.labels[1].bm],signs=[1,1],compact_form=False)[0]
+                        bmr=bmg.join_bms([V0.labels[2].bm,V0.labels[3].bm],signs=[-1,1],compact_form=False)[0]
+                        K1K2=Tensor(V.reshape([FL.shape[0]*hndim,FR.shape[0]*hndim]),labels=[BLabel('KL',bml),BLabel('KR',bmr)])
+                        K1K2_block,pms=K1K2.b_reorder(return_pm=True)
+                        #perform svd and roll back to original non-block structure
+                        K1,S,K2=svdbd(K1K2_block,cbond_str='%s_%s'%(self.labels[-1],l+1))
+                        K1,K2=K1[argsort(pms[0])],K2[:,argsort(pms[1])]
+                        #do the truncation
+                        if len(S)>maxN[iiter]:
+                            Smin=sort(S)[-maxN[iiter]]
+                            kpmask=S>=Smin
+                            K1,S,K2=K1[:,kpmask],S[kpmask],K2[kpmask]
+                            bm_new=trunc_bm(K2.labels[0].bm,kpmask=kpmask)
+                            K2.labels[0].bm=K1.labels[1].bm=bm_new
+                        K1[abs(K1)<ZERO_REF]=0
+                        K2[abs(K2)<ZERO_REF]=0
+                        #set datas
+                        bdim=len(S)
+                        self.ket.AL.append(Tensor(K1.reshape([K0s[0].shape[0],hndim,bdim]),labels=K0s[0].labels[:2]+K1.labels[-1:]))
+                        self.ket.S=S
+                        self.ket.BL.pop(0)
+                        self.ket.BL[0]=Tensor(K2.reshape([bdim,hndim,K0s[1].shape[2]]),labels=K2.labels[:1]+K0s[1].labels[1:])
+                    elif nsite_update==1:
+                        print 'OV',v0.dot(V)
+                        self.ket.BL[0]=Tensor(V.reshape(V0.shape),labels=V0.labels)
+                        self.S=ones(V0.shape[0])  #S has been taken into consideration, so, don't use it anymore.
+                        self.ket>>1
+                        bdim='UNCHANGED'
 
                     #update our contractions.
                     #1. the left part
-                    cket=self.ket.get(l-1,attach_S='B')
-                    cbra=cket.conj()
-                    cbra.labels=[cket.labels[0].chstr('%s_%s'%(self.labels[2],l-1)),\
-                            cket.labels[1].chstr('%s_%s'%(self.labels[0],l-1)),\
-                            cket.labels[2].chstr('%s_%s'%(self.labels[2],l))]
-                    self.LPART[l]=cbra*self.LPART[l-1]*self.H.get(l-1)*cket
-
-                    #2. the right part
-                    cket=self.ket.get(l,attach_S='A')
+                    cket=self.ket.get(l)
                     cbra=cket.conj()
                     cbra.labels=[cket.labels[0].chstr('%s_%s'%(self.labels[2],l)),\
                             cket.labels[1].chstr('%s_%s'%(self.labels[0],l)),\
                             cket.labels[2].chstr('%s_%s'%(self.labels[2],l+1))]
-                    self.RPART[nsite-l]=cbra*self.RPART[nsite-l-1]*self.H.get(l)*cket
                     t3=time.time()
+                    print [cbra,self.LPART[l],self.H.get(l),cket]
+                    print [cbra.shape,self.LPART[l].shape,self.H.get(l).shape,cket.shape]
+                    self.LPART[l+1]=cbra*self.LPART[l]*self.H.get(l)*cket
+
+                    #2. the right part
+                    cket=self.ket.get(l+nsite_update-1)
+                    cbra=cket.conj()
+                    cbra.labels=[cket.labels[0].chstr('%s_%s'%(self.labels[2],l+nsite_update-1)),\
+                            cket.labels[1].chstr('%s_%s'%(self.labels[0],l+nsite_update-1)),\
+                            cket.labels[2].chstr('%s_%s'%(self.labels[2],l+nsite_update))]
+                    self.RPART[nsite-l-nsite_update+1]=cbra*self.RPART[nsite-l-nsite_update]*self.H.get(l+nsite_update-1)*cket
 
                     #schedular check
                     elist.append(Emin)
                     diff=Inf if len(elist)<=1 else elist[-1]-elist[-2]
-                    print 'Get Emin = %.12f, tol = %s, Elapse -> %s, %s states kept.'%(Emin,diff,t3-t0,len(S))
+                    print 'Get Emin = %.12f, tol = %s, Elapse -> %s, %s states kept, overlap %s.'%(Emin,diff,t3-t0,bdim,overlap)
                     print 'Time: get Tc(%s), eigen(%s), svd(%s)'%(t1-t0,t2-t1,t3-t2)
+                    if bdim>maxN[-1] and isinstance(bdim,int): pdb.set_trace()
                     if iiter==endpoint[0] and direction==endpoint[1] and l==endpoint[2]:
                         print 'RUN COMPLETE!'
                         return Emin,self.ket
@@ -290,4 +291,5 @@ class VMPSEngine(object):
             if iiter==0:
                 Emin_last=Inf
             diff=Emin_last-Emin
+            Emin_last=Emin
             print 'ITERATION SUMMARY: Emin/site = %s, tol = %s'%(Emin,diff)
