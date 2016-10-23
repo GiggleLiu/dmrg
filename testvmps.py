@@ -74,7 +74,7 @@ class TestVMPS(object):
         '''
         Run vMPS for Heisenberg model.
         '''
-        nsite=10
+        nsite=20
         model=self.get_model(nsite)
         #EG,mps=self.dmrgrun(model)
 
@@ -90,8 +90,10 @@ class TestVMPS(object):
         #check the label setting is working properly
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N) for ai in vegn.ket.AL+vegn.ket.BL]))
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N,ai.labels[3].bm.N) for ai in vegn.H.OL]))
-        vegn.run(maxN=100,which='SA',nsite_update=2,endpoint=(3,'->',0))
+        vegn.run(maxN=100,which='SA',nsite_update=2,endpoint=(5,'->',0))
+        pdb.set_trace()
         vegn.run(maxN=100,which='SA',nsite_update=1,endpoint=(3,'->',0))
+        pdb.set_trace()
 
 if __name__=='__main__':
     TestVMPS().test_vmps()

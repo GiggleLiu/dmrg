@@ -9,7 +9,7 @@ from scipy.sparse import csr_matrix,coo_matrix
 from matplotlib.pyplot import *
 import time,pdb
 
-from rglib.mps import Contraction,contract,Tensor,svdbd,check_validity_mps,BLabel
+from rglib.mps import Contraction,contract,Tensor,svdbd,check_validity_mps,BLabel,BMPS,check_flow_mpx
 from blockmatrix import trunc_bm
 from pydavidson import JDh
 from tba.hgen import ind2c
@@ -77,6 +77,11 @@ class VMPSEngine(object):
             ch=self.H.get(nsite-i-1)
             FR=cbra*FR*ch*cket
             self.RPART[i+1]=FR
+
+    @property
+    def energy(self):
+        '''Get the energy from current status.'''
+        return _evolve(self.H,self.ket,fromleft=False).item()
 
     def _eigsh(self,H,v0,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1,iprint=0,which='SA'):
         '''
@@ -181,12 +186,12 @@ class VMPSEngine(object):
             print '########### STARTING NEW ITERATION %s ################'%iiter
             for direction,iterator in zip(['->','<-'],[xrange(nsite-nsite_update),xrange(nsite-nsite_update,0,-1)]):
                 for l in iterator:   #l is the index of first site.
-                    print 'Running iter = %s, direction = %s, l = %s'%(iiter,direction,l)
+                    print 'Running iter = %s, direction = %s, l = %s'%(iiter+1,direction,l)
                     print 'A'*(l)+'.'*nsite_update+'B'*(nsite-l-nsite_update)
                     t0=time.time()
 
                     #construct the Tensor for Hamilonian
-                    self.ket>>l-self.ket.l
+                    self.ket>>l+nsite_update/2-self.ket.l
                     FL=self.LPART[l]
                     FR=self.RPART[nsite-l-nsite_update]
                     Os=[self.H.get(li) for li in xrange(l,l+nsite_update)]
@@ -246,36 +251,40 @@ class VMPSEngine(object):
                         K2[abs(K2)<ZERO_REF]=0
                         #set datas
                         bdim=len(S)
-                        self.ket.AL.append(Tensor(K1.reshape([K0s[0].shape[0],hndim,bdim]),labels=K0s[0].labels[:2]+K1.labels[-1:]))
+                        self.ket.AL[-1]=Tensor(K1.reshape([K0s[0].shape[0],hndim,bdim]),labels=K0s[0].labels[:2]+K1.labels[-1:])
                         self.ket.S=S
-                        self.ket.BL.pop(0)
                         self.ket.BL[0]=Tensor(K2.reshape([bdim,hndim,K0s[1].shape[2]]),labels=K2.labels[:1]+K0s[1].labels[1:])
                     elif nsite_update==1:
-                        print 'OV',v0.dot(V)
-                        self.ket.BL[0]=Tensor(V.reshape(V0.shape),labels=V0.labels)
-                        self.S=ones(V0.shape[0])  #S has been taken into consideration, so, don't use it anymore.
-                        self.ket>>1
-                        bdim='UNCHANGED'
+                        if direction=='->':
+                            self.ket.BL[0]=Tensor(V.reshape(V0.shape),labels=V0.labels)
+                            self.ket.S=ones(V0.shape[0])  #S has been taken into consideration, so, don't use it anymore.
+                            self.ket>>1
+                        else:
+                            self.ket.AL.append(Tensor(V.reshape(V0.shape),labels=V0.labels)); self.ket.BL.pop(0)
+                            self.ket.S=ones(V0.shape[-1])  #S has been taken into consideration, so, don't use it anymore.
+                            self.ket<<1
+                        bdim=len(self.ket.S)
 
                     #update our contractions.
                     #1. the left part
-                    cket=self.ket.get(l)
+                    l_left=l if nsite_update==2 else self.ket.l-1
+                    cket=self.ket.get(l_left)
                     cbra=cket.conj()
-                    cbra.labels=[cket.labels[0].chstr('%s_%s'%(self.labels[2],l)),\
-                            cket.labels[1].chstr('%s_%s'%(self.labels[0],l)),\
-                            cket.labels[2].chstr('%s_%s'%(self.labels[2],l+1))]
+                    cbra.labels=[cket.labels[0].chstr('%s_%s'%(self.labels[2],l_left)),\
+                            cket.labels[1].chstr('%s_%s'%(self.labels[0],l_left)),\
+                            cket.labels[2].chstr('%s_%s'%(self.labels[2],l_left+1))]
                     t3=time.time()
-                    print [cbra,self.LPART[l],self.H.get(l),cket]
-                    print [cbra.shape,self.LPART[l].shape,self.H.get(l).shape,cket.shape]
-                    self.LPART[l+1]=cbra*self.LPART[l]*self.H.get(l)*cket
+                    self.LPART[l_left+1]=cbra*self.LPART[l_left]*self.H.get(l_left)*cket
+                    print 'update L=%s, shape %s'%(l_left+1,self.LPART[l_left+1].shape)
 
                     #2. the right part
-                    cket=self.ket.get(l+nsite_update-1)
+                    l_right=l+1 if nsite_update==2 else self.ket.l
+                    cket=self.ket.get(l_right)
                     cbra=cket.conj()
-                    cbra.labels=[cket.labels[0].chstr('%s_%s'%(self.labels[2],l+nsite_update-1)),\
-                            cket.labels[1].chstr('%s_%s'%(self.labels[0],l+nsite_update-1)),\
-                            cket.labels[2].chstr('%s_%s'%(self.labels[2],l+nsite_update))]
-                    self.RPART[nsite-l-nsite_update+1]=cbra*self.RPART[nsite-l-nsite_update]*self.H.get(l+nsite_update-1)*cket
+                    cbra.labels=[cket.labels[0].chstr('%s_%s'%(self.labels[2],l_right)),\
+                            cket.labels[1].chstr('%s_%s'%(self.labels[0],l_right)),\
+                            cket.labels[2].chstr('%s_%s'%(self.labels[2],l_right+1))]
+                    self.RPART[nsite-l_right]=cbra*self.RPART[nsite-l_right-1]*self.H.get(l_right)*cket
 
                     #schedular check
                     elist.append(Emin)
