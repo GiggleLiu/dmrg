@@ -189,41 +189,35 @@ class VMPSEngine(object):
                         cinds=ind2c(indices,NN)
                         #get the sub-block.
                         if nsite_update==2:
-                            #Tc=fget_subblock2b(FL,Os[0],Os[1],FR,cinds)
                             TcL,TcR=(FL*Os[0]).chorder([0,2,1,3,4]),(Os[1]*FR).chorder([0,1,3,2,4]) #acsmb;bsmac
                             TcL,TcR=TcL.reshape([prod(TcL.shape[:2]),-1,TcL.shape[-1]]),TcR.reshape([TcR.shape[0],prod(TcR.shape[1:3]),-1])
-                            TcL[abs(TcL)<ZERO_REF]=0
-                            TcR[abs(TcR)<ZERO_REF]=0
-                            #Tc=coo_matrix((TcL.shape[0]*TcR.shape[1],TcL.shape[1]*TcR.shape[2]),dtype=TcL.dtype)
-                            ta=time.time()
-                            datas,rows,cols=[],[],[]
-                            for i in xrange(TcL.shape[-1]):
-                                tj=time.time()
-                                Tci=skron2(csr_matrix(TcL[:,:,i]),csc_matrix(TcR[i,:,:]))
-                                rowi=Tci.row
-                                if len(rowi)>0:
-                                    datai=Tci.data;coli=Tci.col
-                                    mask1a,mask2b=ftake_only(rowi,coli,indices)
-                                    rowi,ncoli,datai=rowi[mask1a.astype('bool')],coli[mask1a.astype('bool')]
-                                    mask1b,mask2b=ftake_only(coli,indices)
-                                    mask1,mask2=mask1a&mask1b,mask2a&mask2b
-                                    rowi=where(mask2); coli=where(mask2); datai=datai[mask1]
-                                    datas.append(datai); cols.append(coli); rows.append(rowi)
-                                ti=time.time()
-                                print ti-tj
-                            dim=len(indices)
-                            Tc=coo_matrix((concatenate(datas),(concatenate(rows),concatenate(cols))),shape=(dim,dim),dtype=TcL.dtype)
-                            Tc=Tc.tocsr()#[indices][:,indices]
-                            tb=time.time()
-                            print '@%s'%(tb-ta)
+                            #Tc=csr_matrix(fget_subblock2b(FL,Os[0],Os[1],FR,cinds))
                         elif nsite_update==1:
-                            Tc=fget_subblock1(FL,Os[0],FR,cinds)
+                            TcL,TcR=(FL*Os[0]).chorder([0,2,1,3,4]),FR.chorder([1,0,2]) #acsmb;bsmac
+                            TcL=TcL.reshape([prod(TcL.shape[:2]),-1,TcL.shape[-1]])
+                            #Tc=csr_matrix(fget_subblock1(FL,Os[0],FR,cinds))
+
+                        dim=TcL.shape[0]*TcR.shape[1]
+                        TcL[abs(TcL)<ZERO_REF]=0
+                        TcR[abs(TcR)<ZERO_REF]=0
+                        datas,rows,cols=[],[],[]
+                        indices_=append(indices,[-1])
+                        for i in xrange(TcL.shape[-1]):
+                            Tci=skron2(csr_matrix(TcL[:,:,i]),csc_matrix(TcR[i,:,:]))
+                            rowi,datai,coli=Tci.row,Tci.data,Tci.col
+                            datas.append(datai); cols.append(coli); rows.append(rowi)
+                        data,row,col=concatenate(datas),concatenate(rows),concatenate(cols)
+                        mask=(indices_[searchsorted(indices,row)]==row)&(indices_[searchsorted(indices,row)]==row)
+                        row,col,data=row[mask],col[mask],data[mask]
+                        Tc=coo_matrix((data,(row,col)),shape=(dim,dim),dtype=TcL.dtype)
+                        Tc=Tc.tocsr()[indices][:,indices]
                     else:
                         if nsite_update==2:
                             Tc=(FL*Os[0]*Os[1]*FR).chorder([0,2,4,6,1,3,5,7])
                         else:
                             Tc=(FL*Os[0]*FR).chorder([0,2,4,1,3,5])
-                        Tc=Tc.reshape([prod(Tc.shape[:2+nsite_update]),-1])
+                        Tc[abs(Tc)<ZERO_REF]=0
+                        Tc=csr_matrix(Tc.reshape([prod(Tc.shape[:2+nsite_update]),-1]))
                     t1=time.time()
 
                     #third, get the initial vector
