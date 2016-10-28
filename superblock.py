@@ -10,7 +10,6 @@ import copy,time,pdb,warnings
 
 from rglib.hexpand import Z4scfg,kron
 from rglib.mps import OpString,OpUnit,OpCollection
-from blockmatrix import get_lshift1
 from flib.flib import fget_subblock_dmrg
 
 __all__=['site_image','joint_extract_block','SuperBlock']

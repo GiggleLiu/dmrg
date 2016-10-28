@@ -86,13 +86,35 @@ class TestVMPS(object):
         k0=product_state(config=repeat([0,1],nsite/2),hndim=2,bmg=bmg)
 
         #setting up the engine
-        vegn=VMPSEngine(H=model.H.use_bm(bmg),k0=k0,eigen_solver='JD')
+        vegn=VMPSEngine(H=model.H.use_bm(bmg),k0=k0,eigen_solver='LC')
         #check the label setting is working properly
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N) for ai in vegn.ket.AL+vegn.ket.BL]))
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N,ai.labels[3].bm.N) for ai in vegn.H.OL]))
-        vegn.run(maxN=100,which='SA',nsite_update=2,endpoint=(5,'->',0))
+        vegn.run(maxN=[10,20,30,40,80,100,120,80,80,80],which='SA',nsite_update=2,endpoint=(7,'->',0))
         pdb.set_trace()
-        vegn.run(maxN=100,which='SA',nsite_update=1,endpoint=(3,'->',0))
+        vegn.run(maxN=80,which='SA',nsite_update=1,endpoint=(3,'->',0))
+        pdb.set_trace()
+
+    def test_vmps2(self):
+        '''
+        Run vMPS for Heisenberg model.
+        '''
+        nsite=20
+        model=self.get_model(nsite)
+        #EG,mps=self.dmrgrun(model)
+
+        #run vmps
+        #generate a random mps as initial vector
+        spaceconfig=SpinSpaceConfig([2,1])
+        #k0=product_state(config=random.randint(0,2,nsite),hndim=2)
+        k0=product_state(config=repeat([0,1],nsite/2),hndim=spaceconfig.hndim)
+
+        #setting up the engine
+        vegn=VMPSEngine(H=model.H,k0=k0,eigen_solver='LC')
+        #check the label setting is working properly
+        vegn.run(maxN=40,which='SA',nsite_update=2,endpoint=(3,'->',0))
+        pdb.set_trace()
+        vegn.run(maxN=40,which='SA',nsite_update=1,endpoint=(3,'->',0))
         pdb.set_trace()
 
 if __name__=='__main__':
