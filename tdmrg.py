@@ -5,7 +5,7 @@ Time dependant DMRG, including TEBD, tDMRG.
 from numpy import *
 from scipy.linalg import expm
 
-from rglib import RGHGen
+from rglib import ExpandGenerator
 from lanczos import get_H
 
 class EvolveOp(object):
@@ -28,7 +28,7 @@ class EvolveOp(object):
             sop=self.opc.query(i)
             op=bop+sop
             #get the hamiltonian
-            hgen=RGHGen(spaceconfig=spaceconfig,H=op,evolutor_type='null')
+            hgen=ExpandGenerator(spaceconfig=spaceconfig,H=op,evolutor_type='null')
             H=get_H(hgen)
             #get the evolution matrix, exponential of H
             expH=expm(H)

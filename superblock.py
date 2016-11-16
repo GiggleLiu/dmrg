@@ -8,7 +8,8 @@ from scipy.linalg import kron as dkron
 from numpy.linalg import norm
 import copy,time,pdb,warnings
 
-from rglib.hexpand import Z4scfg,kron
+from tba.hgen import Z4scfg
+from rglib.hexpand import kron_csr as kron
 from rglib.mps import OpString,OpUnit,OpCollection
 from flib.flib import fget_subblock_dmrg
 
@@ -138,7 +139,7 @@ class SuperBlock(object):
         SuperBlock(hl,hr,order='A.B.')
 
     Attributes:
-        :hl/hr: <RGHGen>, Hamiltonian Generator for left and right blocks.
+        :hl/hr: <ExpandGenerator>, Hamiltonian Generator for left and right blocks.
         :order: 'A.B.'/'A..B', the space ordering.
 
     Read Only Attributes:

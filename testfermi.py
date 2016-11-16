@@ -13,7 +13,7 @@ import time,pdb,warnings,copy
 from tba.hgen import RHGenerator,op_simple_hopping,op_U,SuperSpaceConfig,SpaceConfig,op_simple_onsite
 from tba.lattice import Chain
 from rglib.mps import op2collection
-from rglib.hexpand import RGHGen,NullEvolutor,MaskedEvolutor,Evolutor
+from rglib.hexpand import ExpandGenerator,NullEvolutor,MaskedEvolutor,Evolutor
 from lanczos import get_H,get_H_bm
 from dmrg import *
 
@@ -94,7 +94,7 @@ class TestFH(object):
         self.set_params(U=2.,t=1.,mu=1.,t2=0.,nsite=nsite)
         spaceconfig=self.spaceconfig1
         H_serial=op2collection(op=self.model_occ.hgen.get_opH())
-        expander3=RGHGen(spaceconfig=spaceconfig,H=H_serial,evolutor_type='masked',use_zstring=True)
+        expander3=ExpandGenerator(spaceconfig=spaceconfig,H=H_serial,evolutor_type='masked',use_zstring=True)
         dmrgegn=DMRGEngine(hgen=expander3,tol=0,reflect=True)
         dmrgegn.use_U1_symmetry('QM',target_block=(0,0))
         for c in [-1,1]:
@@ -122,9 +122,9 @@ class TestFH(object):
         H_serial=op2collection(op=self.model_occ.hgen.get_opH())
         H_serial_Z=copy.copy(H_serial)
         H_serial_Z.insert_Zs(spaceconfig=spaceconfig)
-        expander=RGHGen(spaceconfig=spaceconfig,H=H_serial_Z,evolutor_type='null',use_zstring=True)
+        expander=ExpandGenerator(spaceconfig=spaceconfig,H=H_serial_Z,evolutor_type='null',use_zstring=True)
         H=get_H(hgen=expander)
-        expander2=RGHGen(spaceconfig=spaceconfig,H=H_serial_Z,evolutor_type='normal',use_zstring=True)
+        expander2=ExpandGenerator(spaceconfig=spaceconfig,H=H_serial_Z,evolutor_type='normal',use_zstring=True)
         H2,bm2=get_H_bm(hgen=expander2,bstr='QM')
         Emin=eigsh(H,k=1,which='SA')[0]
         Emin2=eigsh(H2,k=1,which='SA')[0]
@@ -133,7 +133,7 @@ class TestFH(object):
         assert_almost_equal(Emin_exact,Emin2)
 
         #the solution through dmrg.
-        expander3=RGHGen(spaceconfig=spaceconfig,H=H_serial,evolutor_type='masked',use_zstring=True)
+        expander3=ExpandGenerator(spaceconfig=spaceconfig,H=H_serial,evolutor_type='masked',use_zstring=True)
         dmrgegn=DMRGEngine(hgen=expander3,tol=0,reflect=False)
         dmrgegn.use_U1_symmetry('QM',target_block=(0,0))
         EG2,Vmin2=dmrgegn.run_finite(endpoint=(5,'<-',0),maxN=[10,30,60,100,100],tol=0)

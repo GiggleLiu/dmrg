@@ -25,7 +25,7 @@ class DMRGEngine(object):
 
     Attributes:
         :hchain: <OpCollection>, the chain hamiltonian.
-        :hgen: <RGHGen>, hamiltonian Generator.
+        :hgen: <ExpandGenerator>, hamiltonian Generator.
         :bmg: <BlockMarkerGenerator>, the block marker generator.
         :tol: float, the tolerence, when maxN and tol are both set, we keep the lower dimension.
         :reflect: bool, True if left<->right reflect, can be used to shortcut the run time.
@@ -77,7 +77,7 @@ class DMRGEngine(object):
 
                 * `l` -> the left part.
                 * `r` -> the right part.
-            :hgen: <RGHGen>, the RG hamiltonian generator.
+            :hgen: <ExpandGenerator>, the RG hamiltonian generator.
             :length: int, the length of block, if set, it will do a length check.
         '''
         assert(length is None or length==hgen.N)
@@ -226,7 +226,7 @@ class DMRGEngine(object):
         Run a single step of DMRG iteration.
 
         Parameters:
-            :hgen_l,hgen_r: <RGHGen>, the hamiltonian generator for left and right blocks.
+            :hgen_l,hgen_r: <ExpandGenerator>, the hamiltonian generator for left and right blocks.
             :ops: list of <OpString>/<OpUnit>, the relevant operators to update.
             :direction: str,
 
@@ -385,7 +385,7 @@ class DMRGEngine(object):
 
         Parameters:
             :phi: ndarray, the state from the last iteration, [llink, site1, rlink, site2]
-            :hgen_l/hgen_r: <RGHGen>, the hamiltonian generator for the left/right block.
+            :hgen_l/hgen_r: <ExpandGenerator>, the hamiltonian generator for the left/right block.
             :direction: '->'/'<-', the moving direction.
 
         Return:

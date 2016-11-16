@@ -7,7 +7,7 @@ from scipy.linalg import expm,svd,norm
 import pdb,time,copy
 
 from rglib.mps import MPSBase,Tensor,OpCollection
-from rglib.hexpand import RGHGen
+from rglib.hexpand import ExpandGenerator
 from lanczos import get_H
 
 __all__=['IVMPS','ITEBDEngine','entanglement_entropy']
@@ -165,8 +165,8 @@ class ITEBDEngine(object):
         for i,hi in enumerate(hs):
             ia,ib=i%npart,(i+1)%npart
             d1,d2=GL[ia].shape[site_axis],GL[ib].shape[site_axis]
-            H=get_H(RGHGen(spaceconfig=spaceconfig,H=hi,evolutor_type='null')).todense()
-            U=expm(-dt*get_H(RGHGen(spaceconfig=spaceconfig,H=hi,evolutor_type='null')).todense())
+            H=get_H(ExpandGenerator(spaceconfig=spaceconfig,hchain=hi,evolutor_type='null')).todense()
+            U=expm(-dt*get_H(ExpandGenerator(spaceconfig=spaceconfig,H=hi,evolutor_type='null')).todense())
             U=Tensor(U.reshape([d1,d2,d1,d2]),labels=['Us1','Us2',GL[ia].labels[site_axis],GL[ib].labels[site_axis]])
             UL.append(U)
         if len(UL)==1:

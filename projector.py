@@ -31,7 +31,7 @@ class Projector(object):
         Initialize the projector, calculation the first state projection.
 
         Parameters:
-            :hgen_l/hgen_r: <RGHGen>, starting hamiltonian generator for left and right block with `NL+NR = nsite-2`.
+            :hgen_l/hgen_r: <ExpandGenerator>, starting hamiltonian generator for left and right block with `NL+NR = nsite-2`.
 
         Return:
             ndarray, the representation of mps <al,sl,sl+1,al+2|self.mps>.

@@ -14,8 +14,8 @@ from rglib.mps import contract,Tensor,svdbd,check_validity_mps,BLabel,BMPS,check
 from blockmatrix import trunc_bm
 from pydavidson import JDh
 from tba.hgen import ind2c
-from rglib.hexpand import kron as skron2
-from flib.flib import fget_subblock2a,fget_subblock2b,fget_subblock1,ftake_only
+from rglib.hexpand import kron_csr
+from flib.flib import fget_subblock2a,fget_subblock2b,fget_subblock1
 
 __all__=['VMPSEngine']
 
@@ -91,13 +91,15 @@ class VMPSEngine(object):
             iprint=0
             maxiter=500
             if projector is not None:
-                e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,maxiter=maxiter,sigma=sigma,which='SA',iprint=iprint)
+                e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,maxiter=maxiter,linear_solver_maxiter=5,\
+                        sigma=sigma,which='SA',iprint=iprint,linear_solver='gmres')
             else:
                 if sigma is None:
-                    e,v=JDh(H,v0=v0,k=max(lc_search_space,k),projector=projector,tol=tol,maxiter=maxiter,which='SA',iprint=iprint)
+                    e,v=JDh(H,v0=v0,k=max(lc_search_space,k),projector=projector,tol=tol,maxiter=maxiter,\
+                            linear_solver_maxiter=10,which='SA',iprint=iprint,linear_solver='gmres')
                 else:
-                    e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,sigma=sigma,which='SL',\
-                            iprint=iprint,converge_bound=1e-10,maxiter=maxiter)
+                    e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,sigma=sigma,which='SL',linear_solver_maxiter=5,\
+                            iprint=iprint,converge_bound=1e-10,maxiter=maxiter,linear_solver='gmres')
 
         nstate=len(e)
         if nstate==0:
@@ -182,7 +184,7 @@ class VMPSEngine(object):
                         bms=[lb.bm for lb in K0s[0].labels[:1]+[K.labels[1] for K in K0s]+K0s[-1].labels[-1:]]
                         bmd,pmd=bmg.join_bms(bms,signs=[1]+[1]*nsite_update+[-1])
                         #get the indices taken
-                        sls=bmd.get_slice(zeros(len(bmg.qstring),dtype='int32'),uselabel=True)
+                        sls=bmd.get_slice(zeros(len(bmg.qstring),dtype='int32'),useqn=True)
                         indices=pmd[sls]
                         #turn the indices into subindices.
                         NN=array([bm.N for bm in bms])
@@ -197,20 +199,13 @@ class VMPSEngine(object):
                             TcL=TcL.reshape([prod(TcL.shape[:2]),-1,TcL.shape[-1]])
                             #Tc=csr_matrix(fget_subblock1(FL,Os[0],FR,cinds))
 
-                        dim=TcL.shape[0]*TcR.shape[1]
                         TcL[abs(TcL)<ZERO_REF]=0
                         TcR[abs(TcR)<ZERO_REF]=0
-                        datas,rows,cols=[],[],[]
-                        indices_=append(indices,[-1])
+                        cdim=len(indices)
+                        Tc=csr_matrix((cdim,cdim))
                         for i in xrange(TcL.shape[-1]):
-                            Tci=skron2(csr_matrix(TcL[:,:,i]),csc_matrix(TcR[i,:,:]))
-                            rowi,datai,coli=Tci.row,Tci.data,Tci.col
-                            datas.append(datai); cols.append(coli); rows.append(rowi)
-                        data,row,col=concatenate(datas),concatenate(rows),concatenate(cols)
-                        mask=(indices_[searchsorted(indices,row)]==row)&(indices_[searchsorted(indices,row)]==row)
-                        row,col,data=row[mask],col[mask],data[mask]
-                        Tc=coo_matrix((data,(row,col)),shape=(dim,dim),dtype=TcL.dtype)
-                        Tc=Tc.tocsr()[indices][:,indices]
+                            Tci=kron_csr(csr_matrix(TcL[:,:,i]),csr_matrix(TcR[i,:,:]),takerows=indices)
+                            Tc=Tc+Tci.tocsc()[:,indices]
                     else:
                         if nsite_update==2:
                             Tc=(FL*Os[0]*Os[1]*FR).chorder([0,2,4,6,1,3,5,7])
@@ -297,7 +292,7 @@ class VMPSEngine(object):
                     #schedular check
                     elist.append(E)
                     diff=Inf if len(elist)<=1 else elist[-1]-elist[-2]
-                    print 'Get E = %.12f, tol = %s, Elapse -> %s, %s states kept, overlap %s.'%(E,diff,t3-t0,bdim,overlap)
+                    print 'Get E = %.12f, tol = %s, Elapse -> %s, %s states kept, nnz= %s, overlap %s.'%(E,diff,t3-t0,bdim,Tc.nnz,overlap)
                     print 'Time: get Tc(%s), eigen(%s), svd(%s)'%(t1-t0,t2-t1,t3-t2)
                     if iiter+1==endpoint[0] and direction==endpoint[1] and l==endpoint[2]:
                         print 'RUN COMPLETE!'
@@ -309,3 +304,9 @@ class VMPSEngine(object):
             diff=E_last-E
             E_last=E
             print 'ITERATION SUMMARY: E/site = %s, tol = %s'%(E,diff)
+
+    def warmup(self,maxiter=10):
+        '''Initialize the state.'''
+        run10=run5=maxiter/3
+        run20=maxiter-run10-run5
+        self.run(maxN=[5]*run5+[10]*run10+[20]*run20,which='SA',nsite_update=2,endpoint=(maxiter,'<-',1))

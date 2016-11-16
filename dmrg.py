@@ -12,9 +12,10 @@ import scipy.sparse as sps
 import copy,time,pdb,warnings,numbers
 
 from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker,svdb
-from tba.hgen import SpinSpaceConfig,ind2c
+from tba.hgen import SpinSpaceConfig,ind2c,Z4scfg
 from rglib.mps import MPS,OpString,tensor,insert_Zs
-from rglib.hexpand import NullEvolutor,Z4scfg,MaskedEvolutor,kron
+from rglib.hexpand import NullEvolutor,MaskedEvolutor
+from rglib.hexpand import kron_csr as kron
 from blockmatrix import SimpleBMG,sign4bm,show_bm,trunc_bm
 from disc_symm import SymmetryHandler
 from superblock import SuperBlock,site_image,joint_extract_block
@@ -120,7 +121,7 @@ class DMRGEngine(object):
     DMRG Engine.
 
     Attributes:
-        :hgen: <RGHGen>, hamiltonian Generator.
+        :hgen: <ExpandGenerator>, hamiltonian Generator.
         :bmg: <BlockMarkerGenerator>, the block marker generator.
         :tol: float, the tolerence, when maxN and tol are both set, we keep the lower dimension.
         :reflect: bool, True if left<->right reflect, can be used to shortcut the run time.
@@ -248,7 +249,7 @@ class DMRGEngine(object):
 
                 * `l` -> the left part.
                 * `r` -> the right part.
-            :hgen: <RGHGen>, the RG hamiltonian generator.
+            :hgen: <ExpandGenerator>, the RG hamiltonian generator.
             :length: int, the length of block, if set, it will do a length check.
         '''
         assert(length is None or length==hgen.N)
@@ -469,7 +470,7 @@ class DMRGEngine(object):
         Run a single step of DMRG iteration.
 
         Parameters:
-            :hgen_l,hgen_r: <RGHGen>, the hamiltonian generator for left and right blocks.
+            :hgen_l,hgen_r: <ExpandGenerator>, the hamiltonian generator for left and right blocks.
             :tol: float, the rolerence.
             :maxN: int, maximum number of kept states and the tolerence for truncation weight.
             :initial_state: 1D array/None, the initial state(prediction), None for random.
@@ -577,10 +578,10 @@ class DMRGEngine(object):
         U1,specs,U2,(kpmask1,kpmask2),trunc_error=self.svd_analysis(phis=vl,bml=HL0.shape[0] if bml is None else bml,\
                 bmr=HR0.shape[0] if bmr is None else bmr,pml=pml,pmr=pmr,maxN=maxN)
         print '%s states kept.'%sum(kpmask1)
-        hgen_l.trunc(U=U1,block_marker=bml,kpmask=kpmask1)  #kpmask is also important for setting up the sign
+        hgen_l.trunc(U=U1,kpmask=kpmask1)  #kpmask is also important for setting up the sign
         if hgen_l is not hgen_r:
             #spec2,U2,kpmask2,trunc_error=self.rdm_analysis(phis=vl,bml=bml,bmr=bmr,side='r',maxN=maxN)
-            hgen_r.trunc(U=U2,block_marker=bmr,kpmask=kpmask2)
+            hgen_r.trunc(U=U2,kpmask=kpmask2)
         phil=[phi.reshape([ndiml0,hndim,ndimr0,hndim]) for phi in vl]
         t3=time.time()
         print 'Elapse -> prepair:%.2f, eigen:%.2f, trunc: %.2f'%(t1-t0,t2-t1,t3-t2)

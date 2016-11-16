@@ -9,7 +9,7 @@ import pdb,copy
 
 from rglib.mps import OpUnit
 from tba.lattice import ind2c,c2ind
-from rglib.hexpand.utils import kron
+from rglib.hexpand.utils import kron_csr as kron
 
 __all__=['DiscSymm','PHSymm','FlipSymm','C2Symm','SymmetryHandler']
 

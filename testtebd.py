@@ -10,7 +10,7 @@ import pdb,time,copy
 
 from tba.hgen import SpinSpaceConfig
 from rglib.mps import MPO,OpUnitI,opunit_Sz,opunit_Sp,opunit_Sm,opunit_Sx,opunit_Sy,MPS,Tensor,opunit_S,get_expect_ivmps
-from rglib.hexpand import RGHGen
+from rglib.hexpand import ExpandGenerator
 from rglib.hexpand import MaskedEvolutor,NullEvolutor,Evolutor
 from lanczos import get_H,get_H_bm
 from tebd import *

@@ -9,7 +9,7 @@ import pdb,time,copy
 
 from tba.hgen import SpinSpaceConfig
 from rglib.mps import WL2OPC,OpUnitI,opunit_Sz,opunit_Sp,opunit_Sm,opunit_Sx,opunit_Sy,MPS
-from rglib.hexpand import RGHGen
+from rglib.hexpand import ExpandGenerator
 from rglib.hexpand import MaskedEvolutor,NullEvolutor,Evolutor
 from dmrg import DMRGEngine
 from lanczos import get_H,get_H_bm
@@ -120,8 +120,8 @@ class DMRGTest():
         '''
         nsite=10
         model=self.get_model(nsite,1)
-        hgen1=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='null')
-        hgen2=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='masked')
+        hgen1=ExpandGenerator(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='null')
+        hgen2=ExpandGenerator(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='masked')
         H=get_H(hgen1)
         EG1=eigsh(H,k=1,which='SA')[0]
         dmrgegn=DMRGEngine(hgen=hgen2,tol=0,reflect=True)
@@ -133,7 +133,7 @@ class DMRGTest():
         '''test for infinite dmrg.'''
         maxiter=100
         model=self.get_model(maxiter+2,1)
-        hgen=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='masked')
+        hgen=ExpandGenerator(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='masked')
         dmrgegn=DMRGEngine(hgen=hgen,tol=0,reflect=True,iprint=10)
         dmrgegn.use_U1_symmetry('M',target_block=zeros(1))
         EG=dmrgegn.run_infinite(maxiter=maxiter,maxN=20,tol=0)[0]
@@ -142,8 +142,8 @@ class DMRGTest():
     def test_lanczos(self):
         '''test for directly construct and solve the ground state energy.'''
         model=self.get_model(10,1)
-        hgen1=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='null')
-        hgen2=RGHGen(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='normal')
+        hgen1=ExpandGenerator(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='null')
+        hgen2=ExpandGenerator(spaceconfig=SpinSpaceConfig([2,1]),H=model.H_serial,evolutor_type='normal')
         dmrgegn=DMRGEngine(hgen=hgen1,tol=0,iprint=10)
         H=get_H(hgen=hgen1)
         H2,bm2=get_H_bm(hgen=hgen2,bstr='M')
