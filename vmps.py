@@ -13,8 +13,7 @@ import time,pdb
 from rglib.mps import contract,Tensor,svdbd,check_validity_mps,BLabel,BMPS,check_flow_mpx,Contractor
 from blockmatrix import trunc_bm
 from pydavidson import JDh
-from tba.hgen import ind2c
-from rglib.hexpand import kron_csr
+from tba.hgen import ind2c,kron_csr
 from flib.flib import fget_subblock2a,fget_subblock2b,fget_subblock1
 
 __all__=['VMPSEngine']
@@ -268,16 +267,17 @@ class VMPSEngine(object):
                         K2[abs(K2)<ZERO_REF]=0
                         #set datas
                         bdim=len(S)
-                        ket.AL[-1]=Tensor(K1.reshape([K0s[0].shape[0],hndim,bdim]),labels=K0s[0].labels[:2]+K1.labels[-1:])
+                        ket.ML[ket.l-1]=Tensor(K1.reshape([K0s[0].shape[0],hndim,bdim]),labels=K0s[0].labels[:2]+K1.labels[-1:])
                         ket.S=S
-                        ket.BL[0]=Tensor(K2.reshape([bdim,hndim,K0s[1].shape[2]]),labels=K2.labels[:1]+K0s[1].labels[1:])
+                        ket.ML[ket.l]=Tensor(K2.reshape([bdim,hndim,K0s[1].shape[2]]),labels=K2.labels[:1]+K0s[1].labels[1:])
                     elif nsite_update==1:
                         if direction=='->':
-                            ket.BL[0]=Tensor(V.reshape(V0.shape),labels=V0.labels)
+                            ket.ML[ket.l]=Tensor(V.reshape(V0.shape),labels=V0.labels)
                             ket.S=ones(V0.shape[0])  #S has been taken into consideration, so, don't use it anymore.
                             ket>>1
                         else:
-                            ket.AL.append(Tensor(V.reshape(V0.shape),labels=V0.labels)); ket.BL.pop(0)
+                            ket.l+=1
+                            ket.ML[ket.l-1]=Tensor(V.reshape(V0.shape),labels=V0.labels)
                             ket.S=ones(V0.shape[-1])  #S has been taken into consideration, so, don't use it anymore.
                             ket<<1
                         bdim=len(ket.S)

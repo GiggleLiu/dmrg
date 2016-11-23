@@ -8,7 +8,8 @@ from scipy.sparse.linalg import eigsh
 from scipy.linalg import eigvalsh
 from numpy.testing import dec,assert_,assert_raises,assert_almost_equal,assert_allclose
 import scipy.sparse as sps
-import time,pdb,warnings,copy
+import time,pdb,warnings,copy,sys
+sys.path.insert(0,'../')
 
 from tba.hgen import RHGenerator,op_simple_hopping,op_U,SuperSpaceConfig,SpaceConfig,op_simple_onsite
 from tba.lattice import Chain

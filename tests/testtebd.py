@@ -6,13 +6,13 @@ from matplotlib.pyplot import *
 from numpy.testing import dec,assert_,assert_raises,assert_almost_equal,assert_allclose
 from scipy.sparse.linalg import eigsh
 from scipy import integrate
-import pdb,time,copy
+import pdb,time,copy,sys
+sys.path.insert(0,'../')
 
 from tba.hgen import SpinSpaceConfig
-from rglib.mps import MPO,OpUnitI,opunit_Sz,opunit_Sp,opunit_Sm,opunit_Sx,opunit_Sy,MPS,Tensor,opunit_S,get_expect_ivmps
+from rglib.mps import MPO,OpUnitI,opunit_Sz,opunit_Sp,opunit_Sm,opunit_Sx,opunit_Sy,MPS,Tensor,opunit_S,get_expect_ivmps,Link,IVMPS
 from rglib.hexpand import ExpandGenerator
 from rglib.hexpand import MaskedEvolutor,NullEvolutor,Evolutor
-from lanczos import get_H,get_H_bm
 from tebd import *
 
 class TestTEBD(object):
@@ -80,28 +80,27 @@ class TestTEBD(object):
 
     def test_ising(self):
         '''Solve model hamiltonians'''
-        egn=ITEBDEngine(tol=1e-10)
         npart=2
-        hlist=arange(0,2,0.1)
-        hlist=[2]
+        hlist=arange(0.,2,0.1)
         spaceconfig=SpinSpaceConfig([2,1])
         #the initial state
         GL=[]
         for i in xrange(npart):
-            Gi=0.5*ones([1,spaceconfig.hndim,1])
+            Gi=Tensor(0.5-0.01*ones([spaceconfig.hndim,1,1]),labels=['s%s'%i,'a%s'%i,'b%s'%i])
+            Gi[0,0,0]=1
             GL.append(Gi)
-        LL=[]
-        for i in xrange(npart):
-            LL.append(ones([1]))
+        LL=[Link(['a0','a1'],ones([1])),Link(['b0','b1'],ones([1]))]
 
-        ivmps0=IVMPS(GL=GL,LL=LL)
-        mpsl,HL,EEL=[],[],[]
+        mpsl,EEL,HL=[],[],[]
         for h in hlist:
             print h
-            H=self.get_Ising(h=2*h,J=4.)
-            mps=egn.run(hs=H,ivmps=copy.copy(ivmps0),spaceconfig=spaceconfig,maxN=5)
+            hb=self.get_Ising(h=2*h,J=4.)
+            egn=ITEBDEngine(hs=[hb]*2,tol=1e-10)
+            ivmps0=IVMPS(tensors=GL,LL=LL)
+            mps=egn.run(ivmps=ivmps0,maxN=5)
+            pdb.set_trace()
             mpsl.append(mps)
-            HL.append(H)
+            HL.append(hb)
 
             ################# Get the exact energies ######################
             f = lambda k,h : -2*sqrt(1+h**2-2*h*cos(k))/pi/2.
@@ -110,24 +109,23 @@ class TestTEBD(object):
 
         SL,EL,ML=[],[],[]
         for mps,H in zip(mpsl,HL):
-            mps2=mps.roll(1)
             SL.append(entanglement_entropy(mps))
-            print get_expect_ivmps(op=H,ket=mps),get_expect_ivmps(op=H,ket=mps2)
-            EL.append(mean([get_expect_ivmps(op=H,ket=mps),get_expect_ivmps(op=H,ket=mps2)]))
-            ML.append(get_expect_ivmps(op=2*opunit_S(which='z',siteindex=0,spaceconfig=spaceconfig),ket=mps))
+            #print get_expect_ivmps(op=H,ket=mps),get_expect_ivmps(op=H,ket=mps2)
+            #EL.append(mean([get_expect_ivmps(op=H,ket=mps),get_expect_ivmps(op=H,ket=mps2)]))
+            #ML.append(get_expect_ivmps(op=2*opunit_S(which='z',siteindex=0,spaceconfig=spaceconfig),ket=mps))
 
         ion()
         subplot(311)
-        plot(SL)
+        #plot(hlist,abs(array(ML)))
         subplot(312)
-        plot(abs(array(EL)-EEL))
+        plot(hlist,SL)
         subplot(313)
-        plot(abs(array(ML)))
+        #plot(hlist,abs(array(EL)-EEL))
         pdb.set_trace()
 
     def test_all(self):
-        self.test_Haldane()
         self.test_ising()
+        self.test_Haldane()
 
 TestTEBD().test_all()
 

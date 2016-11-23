@@ -9,7 +9,7 @@ from numpy.linalg import norm
 import copy,time,pdb,warnings
 
 from tba.hgen import Z4scfg
-from rglib.hexpand import kron_csr as kron
+from tba.hgen import kron_csr as kron
 from rglib.mps import OpString,OpUnit,OpCollection
 from flib.flib import fget_subblock_dmrg
 

@@ -15,7 +15,7 @@ from blockmatrix.blocklib import eigbsh,eigbh,get_blockmarker,svdb
 from tba.hgen import SpinSpaceConfig,ind2c,Z4scfg
 from rglib.mps import MPS,OpString,tensor,insert_Zs
 from rglib.hexpand import NullEvolutor,MaskedEvolutor
-from rglib.hexpand import kron_csr as kron
+from tba.hgen import kron_csr as kron
 from blockmatrix import SimpleBMG,sign4bm,show_bm,trunc_bm
 from disc_symm import SymmetryHandler
 from superblock import SuperBlock,site_image,joint_extract_block

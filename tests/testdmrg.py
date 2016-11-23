@@ -5,7 +5,8 @@ from numpy import *
 from matplotlib.pyplot import *
 from numpy.testing import dec,assert_,assert_raises,assert_almost_equal,assert_allclose
 from scipy.sparse.linalg import eigsh
-import pdb,time,copy
+import pdb,time,copy,sys
+sys.path.insert(0,'../')
 
 from tba.hgen import SpinSpaceConfig
 from rglib.mps import WL2OPC,OpUnitI,opunit_Sz,opunit_Sp,opunit_Sm,opunit_Sx,opunit_Sy,MPS
