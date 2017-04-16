@@ -19,17 +19,17 @@ class TestTEBD(object):
     def get_Ising(self,h,J=1.):
         '''Get the hamiltonian.'''
         #the hamiltonian for Ising model
-        Sz=opunit_Sz(spaceconfig=SpinSpaceConfig([2,1]))
-        Sx=opunit_Sx(spaceconfig=SpinSpaceConfig([2,1]))
+        Sz=opunit_Sz(spaceconfig=SpinSpaceConfig([1,2]))
+        Sx=opunit_Sx(spaceconfig=SpinSpaceConfig([1,2]))
         H=-J*Sz.as_site(0)*Sz.as_site(1)+h*Sx.as_site(0)
         return H
 
     def get_Haldane(self,D,J=1.):
         '''Get the hamiltonian.'''
         #the hamiltonian for Ising model
-        Sx=opunit_Sx(spaceconfig=SpinSpaceConfig([3,1]))
-        Sy=opunit_Sy(spaceconfig=SpinSpaceConfig([3,1]))
-        Sz=opunit_Sz(spaceconfig=SpinSpaceConfig([3,1]))
+        Sx=opunit_Sx(spaceconfig=SpinSpaceConfig([1,3]))
+        Sy=opunit_Sy(spaceconfig=SpinSpaceConfig([1,3]))
+        Sz=opunit_Sz(spaceconfig=SpinSpaceConfig([1,3]))
         H=J*(Sz.as_site(0)*Sz.as_site(1)+Sx.as_site(0)*Sx.as_site(1)+Sy.as_site(0)*Sy.as_site(1))+D*Sz.as_site(0)*Sz.as_site(0)
         return H
 
@@ -38,7 +38,7 @@ class TestTEBD(object):
         egn=ITEBDEngine(tol=1e-10)
         npart=2
         Dlist=arange(0,-0.6,-0.05)
-        spaceconfig=SpinSpaceConfig([3,1])
+        spaceconfig=SpinSpaceConfig([1,3])
         #the initial state
         GL=[]
         for i in xrange(npart):
@@ -82,23 +82,24 @@ class TestTEBD(object):
         '''Solve model hamiltonians'''
         npart=2
         hlist=arange(0.,2,0.1)
-        spaceconfig=SpinSpaceConfig([2,1])
+        spaceconfig=SpinSpaceConfig([1,2])
         #the initial state
         GL=[]
         for i in xrange(npart):
             Gi=Tensor(0.5-0.01*ones([spaceconfig.hndim,1,1]),labels=['s%s'%i,'a%s'%i,'b%s'%i])
             Gi[0,0,0]=1
             GL.append(Gi)
-        LL=[Link(['a0','a1'],ones([1])),Link(['b0','b1'],ones([1]))]
+        GL[1].labels[1:]=GL[1].labels[1:][::-1]
+        #print GL[0].labels
+        #print GL[1].labels
+        LL=[Link(['b0','b1'],ones([1])),Link(['a1','a0'],ones([1]))]
 
         mpsl,EEL,HL=[],[],[]
         for h in hlist:
-            print h
             hb=self.get_Ising(h=2*h,J=4.)
             egn=ITEBDEngine(hs=[hb]*2,tol=1e-10)
             ivmps0=IVMPS(tensors=GL,LL=LL)
             mps=egn.run(ivmps=ivmps0,maxN=5)
-            pdb.set_trace()
             mpsl.append(mps)
             HL.append(hb)
 

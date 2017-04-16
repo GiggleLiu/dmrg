@@ -42,25 +42,25 @@ class ITEBDEngine(object):
 
         #first evaluate theta
         A=ivmps.attach_links(ivmps.tensors[ta],exception=link.labels)
-        B=ivmps.attach_links(ivmps.tensors[tb],exception=link.labels)
-        alabels=A.labels[:]; alabels[la]=B.labels[lb]
-        theta=A.make_copy(labels=alabels,copydata=False)*B #labels -> A.labels(without la)+B.labels(without lb)
+        B=ivmps.attach_links(ivmps.tensors[tb],exception=[])
+        theta=A.make_copy(labels=A.labels[:la]+B.labels[lb:lb+1]+A.labels[la+1:],copydata=False)*B #labels -> A.labels(without la)+B.labels(without lb)
 
         #apply Ui on ivmps, Ui is a 4-leg tensor
         Ui=Tensor(U,labels=['Us1','Us2',A.labels[site_axis],B.labels[site_axis]])
         order=range(ndim(theta)); order.insert(ndim(A)-1,order.pop(1))
         theta0=(Ui*theta).chorder(order)
-        theta=theta0.reshape([A.size/A.shape[la],B.size/B.shape[lb]])
+        theta=theta0.merge_axes(slice(0,ndim(A)-1)).merge_axes(slice(1,ndim(B)))
 
         #SVD, and truncate.
         U,S,V=svd(theta)
         chi=min(sum(S>self.tol),maxN)
-        order1,order2=range(3),range(3)
+        order1,order2=range(ndim(A)),range(ndim(B))
         order1.insert(la,order1.pop(-1))
         order2.insert(lb,order2.pop(0))
-        U=ivmps.detach_links(Tensor(U[:,:chi].reshape(theta0.shape[:ndim(theta0)/2]+(chi,)).transpose(order1),labels=A.labels),exception=link.labels)
-        V=ivmps.detach_links(Tensor(V[:chi,:].reshape((chi,)+theta0.shape[ndim(theta0)/2:]).transpose(order2),labels=B.labels),exception=link.labels)
         link.S=S[:chi]; link.S/=norm(link.S)
+        d0=ndim(theta0)/2
+        U=ivmps.detach_links(Tensor(U[:,:chi].reshape(theta0.shape[:d0]+(chi,)),labels=A.labels[:la]+A.labels[la+1:]+A.labels[la:la+1]),exception=link.labels).chorder(order1)
+        V=ivmps.detach_links(Tensor(V[:chi].reshape((chi,)+theta0.shape[d0:]),labels=B.labels[lb:lb+1]+B.labels[:lb]+B.labels[lb+1:]),exception=link.labels).chorder(order2)
         ivmps.tensors[ta],ivmps.tensors[tb]=U,V
         return ivmps
 
@@ -87,8 +87,6 @@ class ITEBDEngine(object):
         for i in xrange(Nt-1):
             for ilink in xrange(len(UL)):
                 ivmps=self.evolve_single_step(ivmps,UL[ilink],ilink,maxN=maxN)
-                print ivmps.LL[0]
-                pdb.set_trace()
         return ivmps
 
 def random_ivmps_chain(hndim,N=5,labels=['s','a','b']):

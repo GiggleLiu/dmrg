@@ -50,7 +50,7 @@ def _gen_hamiltonian_block0(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
     '''Get the combined hamiltonian for specific block.'''
     ndiml,ndimr=HL0.shape[0],HR0.shape[0]
     bml,bmr,pml,pmr,bmg,target_block=blockinfo['bml'],blockinfo['bmr'],blockinfo['pml'],blockinfo['pmr'],blockinfo['bmg'],blockinfo['target_block']
-    bm_tot,pm=bmg.join_bms([bml,bmr])
+    bm_tot,pm=bmg.join_bms([bml,bmr]).compact_form()
     pm=((pml*len(pmr))[:,newaxis]+pmr).ravel()[pm]
     t0=time.time()
     H1,H2=kron(HL0,sps.identity(ndimr)),kron(sps.identity(ndiml),HR0)
@@ -68,7 +68,7 @@ def _gen_hamiltonian_block0(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
 def _gen_hamiltonian_block(HL0,HR0,hgen_l,hgen_r,interop,blockinfo):
     '''Get the combined hamiltonian for specific block.'''
     ndiml,ndimr=HL0.shape[0],HR0.shape[0]
-    bm_tot,pm=blockinfo['bmg'].join_bms([blockinfo['bml'],blockinfo['bmr']])
+    bm_tot,pm=blockinfo['bmg'].join_bms([blockinfo['bml'],blockinfo['bmr']]).compact_form()
     pm=((blockinfo['pml']*ndimr)[:,newaxis]+blockinfo['pmr']).ravel()[pm]
     indices=pm[bm_tot.get_slice(blockinfo['target_block'],uselabel=True)]
     cinds=ind2c(indices,N=[ndiml,ndimr])
@@ -504,11 +504,11 @@ class DMRGEngine(object):
             if isinstance(hgen_l.evolutor,MaskedEvolutor) and n>1:
                 kpmask_l=hgen_l.evolutor.kpmask(NL-2)     #kpmask is also related to block marker!!!
                 kpmask_r=hgen_r.evolutor.kpmask(NR-2)
-                bml,pml=self.bmg.update1(trunc_bm(hgen_l.block_marker or self.bmg.bm0,kpmask_l))
-                bmr,pmr=self.bmg.update1(trunc_bm(hgen_r.block_marker or self.bmg.bm0,kpmask_r))
+                bml,pml=self.bmg.update1(trunc_bm(hgen_l.block_marker or self.bmg.bm0,kpmask_l)).compact_form()
+                bmr,pmr=self.bmg.update1(trunc_bm(hgen_r.block_marker or self.bmg.bm0,kpmask_r)).compact_form()
             else:
-                bml,pml=self.bmg.update1(hgen_l.block_marker)
-                bmr,pmr=self.bmg.update1(hgen_r.block_marker)
+                bml,pml=self.bmg.update1(hgen_l.block_marker).compact_form()
+                bmr,pmr=self.bmg.update1(hgen_r.block_marker).compact_form()
         else:
             bml,pml=None,None #get_blockmarker(HL0)
             bmr,pmr=None,None #get_blockmarker(HR0)

@@ -10,7 +10,9 @@ from scipy.sparse import kron as skron
 from matplotlib.pyplot import *
 import time,pdb
 
-from rglib.mps import contract,Tensor,svdbd,check_validity_mps,BLabel,BMPS,check_flow_mpx,Contractor
+from pymps import contract,Tensor,check_validity_mps,BLabel,check_flow_mpx
+from contractor import Contractor
+from pymps.mps import _autoset_bms
 from blockmatrix import trunc_bm
 from pydavidson import JDh
 from tba.hgen import ind2c,kron_csr
@@ -20,6 +22,80 @@ __all__=['VMPSEngine']
 
 ZERO_REF=1e-12
 
+def _eigsh(H,v0,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1,iprint=0,which='SA',eigen_solver='LC'):
+    '''
+    solve eigenvalue problem.
+    '''
+    maxiter=5000
+    N=H.shape[0]
+    if iprint==10 and projector is not None:
+        assert(is_commute(H,projector))
+    if which=='SL':
+        E,V=eigh(H)
+        #get the eigenvector with maximum overlap
+        overlap=abs(reshape(v0,[1,-1]).dot(V).ravel())
+        ind=argmax(overlap)
+        print 'Match Overlap = %s'%overlap[ind]
+        return E[ind],V[:,ind:ind+1]
+    if eigen_solver=='LC':
+        k=max(lc_search_space,k)
+        if H.shape[0]<100:
+            e,v=eigh(H.toarray())
+            e,v=e[:k],v[:,:k]
+        else:
+            try:
+                e,v=eigsh(H,k=k,which='SA',maxiter=maxiter,tol=tol,v0=v0)
+            except:
+                e,v=eigsh(H,k=k+1,which='SA',maxiter=maxiter,tol=tol,v0=v0)
+        order=argsort(e)
+        e,v=e[order],v[:,order]
+    else:
+        iprint=0
+        maxiter=500
+        if projector is not None:
+            e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,maxiter=maxiter,linear_solver_maxiter=5,\
+                    sigma=sigma,which='SA',iprint=iprint,linear_solver='gmres')
+        else:
+            if sigma is None:
+                e,v=JDh(H,v0=v0,k=max(lc_search_space,k),projector=projector,tol=tol,maxiter=maxiter,\
+                        linear_solver_maxiter=10,which='SA',iprint=iprint,linear_solver='gmres')
+            else:
+                e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,sigma=sigma,which='SL',linear_solver_maxiter=5,\
+                        iprint=iprint,converge_bound=1e-10,maxiter=maxiter,linear_solver='gmres')
+
+    nstate=len(e)
+    if nstate==0:
+        raise Exception('No Converged Pair!!')
+    elif nstate==k or k>1:
+        return e,v
+
+    #filter out states meeting projector.
+    if projector is not None and lc_search_space!=1:
+        overlaps=array([abs(projector.dot(v[:,i]).conj().dot(v[:,i])) for i in xrange(nstate)])
+        mask0=overlaps>0.1
+        if not any(mask0):
+            raise Exception('Can not find any states meeting specific parity!')
+        mask=overlaps>0.9
+        if sum(mask)==0:
+            #check for degeneracy.
+            istate=where(mask0)[0][0]
+            warnings.warn('Wrong result or degeneracy accur!')
+        else:
+            istate=where(mask)[0][0]
+        v=projector.dot(v[:,istate:istate+1])
+        v=v/norm(v)
+        return e[istate:istate+1],v
+    else:
+        #get the state with maximum overlap.
+        v0H=v0.conj()/norm(v0)
+        overlaps=array([abs(v0H.dot(v[:,i])) for i in xrange(nstate)])
+        istate=argmax(overlaps)
+        if overlaps[istate]<0.7:
+            warnings.warn('Do not find any states same correspond to the one from last iteration!%s'%overlaps)
+    e,v=e[istate:istate+1],v[:,istate:istate+1]
+    return e,v
+
+
 class VMPSEngine(object):
     '''
     Variational MPS Engine.
@@ -28,12 +104,14 @@ class VMPSEngine(object):
         :H: <MPO>, the hamiltonian operator.
         :ket: <MPS>, the eigen state.
         :labels: list, they are [physical-bra, physical-ket, bond-bra, bond-mpo, bond-ket]
+        :nsite_update: int, the sites updated one time.
         :eigen_solver: str, eigenvalue solver.
             *'JD', Jacobi-Davidson method.
             *'LC', Lanczos, method.
     '''
-    def __init__(self,H,k0,labels=['s','m','a','b','c'],eigen_solver='JD'):
+    def __init__(self,H,k0,labels=['s','m','a','b','c'],nsite_update=2,eigen_solver='JD'):
         self.eigen_solver=eigen_solver
+        self.nsite_update=nsite_update
         #set up initial ket
         ket=k0
         ket<<ket.l-1  #right normalize the ket to the first bond, where we start our update
@@ -59,254 +137,320 @@ class VMPSEngine(object):
     @property
     def H(self): return self.con.mpo
 
-    def _eigsh(self,H,v0,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1,iprint=0,which='SA'):
-        '''
-        solve eigenvalue problem.
-        '''
-        maxiter=5000
-        N=H.shape[0]
-        if iprint==10 and projector is not None:
-            assert(is_commute(H,projector))
-        if which=='SL':
-            E,V=eigh(H)
-            #get the eigenvector with maximum overlap
-            overlap=abs(reshape(v0,[1,-1]).dot(V).ravel())
-            ind=argmax(overlap)
-            print 'Match Overlap = %s'%overlap[ind]
-            return E[ind],V[:,ind:ind+1]
-        if self.eigen_solver=='LC':
-            k=max(lc_search_space,k)
-            if H.shape[0]<100:
-                e,v=eigh(H.toarray())
-                e,v=e[:k],v[:,:k]
-            else:
-                try:
-                    e,v=eigsh(H,k=k,which='SA',maxiter=maxiter,tol=tol,v0=v0)
-                except:
-                    e,v=eigsh(H,k=k+1,which='SA',maxiter=maxiter,tol=tol,v0=v0)
-            order=argsort(e)
-            e,v=e[order],v[:,order]
-        else:
-            iprint=0
-            maxiter=500
-            if projector is not None:
-                e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,maxiter=maxiter,linear_solver_maxiter=5,\
-                        sigma=sigma,which='SA',iprint=iprint,linear_solver='gmres')
-            else:
-                if sigma is None:
-                    e,v=JDh(H,v0=v0,k=max(lc_search_space,k),projector=projector,tol=tol,maxiter=maxiter,\
-                            linear_solver_maxiter=10,which='SA',iprint=iprint,linear_solver='gmres')
+    def _get_iterator(self,start,stop):
+        nsite=self.con.ket.nsite
+        nsite_update=self.nsite_update
+        #validate datas
+        if start[2]<0 or start[2]>nsite-nsite_update or stop[2]<0 or stop[2]>nsite_update:
+            raise ValueError()
+        if start[1] not in ['->','<-'] or stop[1] not in ['->','<-']:
+            raise ValueError()
+
+        direction,site=start[1],start[2]
+        for iiter in xrange(start[0],stop[0]+1):
+            print '########### STARTING NEW ITERATION %s ################'%(iiter)
+            while(True):
+                yield iiter,direction,site
+                if iiter==stop[0] and direction==stop[1] and site==stop[2]:
+                    return
+                #next site and sweep direction
+                if direction=='->':
+                    if site>=nsite-nsite_update:
+                        site-=1
+                        direction='<-'
+                    else:
+                        site+=1
                 else:
-                    e,v=JDh(H,v0=v0,k=k,projector=projector,tol=tol,sigma=sigma,which='SL',linear_solver_maxiter=5,\
-                            iprint=iprint,converge_bound=1e-10,maxiter=maxiter,linear_solver='gmres')
+                    if site<=0:
+                        site+=1
+                        direction='->'
+                        break
+                    else:
+                        site-=1
 
-        nstate=len(e)
-        if nstate==0:
-            raise Exception('No Converged Pair!!')
-        elif nstate==k or k>1:
-            return e,v
+    def run(self,nsweep,*args,**kwargs):
+        self.sweep(start=(0,'->',0),stop=(nsweep-1,'<-',0),*args,**kwargs)
 
-        #filter out states meeting projector.
-        if projector is not None and lc_search_space!=1:
-            overlaps=array([abs(projector.dot(v[:,i]).conj().dot(v[:,i])) for i in xrange(nstate)])
-            mask0=overlaps>0.1
-            if not any(mask0):
-                raise Exception('Can not find any states meeting specific parity!')
-            mask=overlaps>0.9
-            if sum(mask)==0:
-                #check for degeneracy.
-                istate=where(mask0)[0][0]
-                warnings.warn('Wrong result or degeneracy accur!')
-            else:
-                istate=where(mask)[0][0]
-            v=projector.dot(v[:,istate:istate+1])
-            v=v/norm(v)
-            return e[istate:istate+1],v
-        else:
-            #get the state with maximum overlap.
-            v0H=v0.conj()/norm(v0)
-            overlaps=array([abs(v0H.dot(v[:,i])) for i in xrange(nstate)])
-            istate=argmax(overlaps)
-            if overlaps[istate]<0.7:
-                warnings.warn('Do not find any states same correspond to the one from last iteration!%s'%overlaps)
-        e,v=e[istate:istate+1],v[:,istate:istate+1]
-        return e,v
-
-    def run(self,endpoint=(7,'->',0),maxN=50,tol=0,which='SL',nsite_update=2):
+    def sweep(self,start,stop,maxN=50,tol=0,which='SL'):
         '''
         Run this application.
 
         Parameters:
-            :maxiter: int, the maximum sweep iteration, one iteration is contains one left sweep, and one right sweep through the chain.
+            :start: len-3 tuple, (the start sweep, moving direction, the start point).
+            :stop: len-3 tuple, (the end sweep, moving direction, the end point).
             :maxN: list/int, the maximum kept dimension.
             :tol: float, the tolerence.
             :which: str, string that specify the <MPS> desired, 'SL'(most similar to k0) or 'SA'(smallest)
-            :nsite_update: int, the sites updated one time.
 
         Return:
             (E, <MPS>)
         '''
         #check data
         ket=self.ket
-        maxiter=endpoint[0]+1
         nsite=ket.nsite
         hndim=ket.hndim
+        nsite_update=self.nsite_update
         use_bm=hasattr(ket,'bmg')
         if use_bm: bmg=ket.bmg
-        if isinstance(maxN,int): maxN=[maxN]*maxiter
-        if endpoint[1]=='->':
-            assert(endpoint[2]>=0 and endpoint[2]<nsite-nsite_update)
-        elif endpoint[1]=='<-':
-            assert(endpoint[2]>0 and endpoint[2]<=nsite-nsite_update)
-        else:
-            raise ValueError()
+        if isinstance(maxN,int): maxN=[maxN]*(stop[0]-start[0]+1)
 
         elist=[]
-        for iiter in xrange(maxiter):
-            print '########### STARTING NEW ITERATION %s ################'%(iiter+1)
-            for direction,iterator in zip(['->','<-'],[xrange(nsite-nsite_update),xrange(nsite-nsite_update,0,-1)]):
-                for l in iterator:   #l is the index of first site.
-                    print 'Running iter = %s, direction = %s, l = %s'%(iiter+1,direction,l)
-                    print 'A'*(l)+'.'*nsite_update+'B'*(nsite-l-nsite_update)
-                    t0=time.time()
+        for iiter,direction,l in self._get_iterator(start,stop):
+            print 'Running iter = %s, direction = %s, l = %s'%(iiter+1,direction,l)
+            print 'A'*(l)+'.'*nsite_update+'B'*(nsite-l-nsite_update)
+            t0=time.time()
 
-                    #construct the Tensor for Hamilonian
-                    ket>>l+nsite_update/2-ket.l
-                    FL=self.con.LPART[l]
-                    FR=self.con.RPART[nsite-l-nsite_update]
-                    Os=[self.H.get(li) for li in xrange(l,l+nsite_update)]
-                    K0s=[ket.get(li,attach_S='B') for li in xrange(l,l+nsite_update)]
+            #construct the Tensor for Hamilonian
+            ket>>l+nsite_update/2-ket.l
+            FL=self.con.LPART[l]
+            FR=self.con.RPART[nsite-l-nsite_update]
+            Os=[self.H.get(li) for li in xrange(l,l+nsite_update)]
+            K0s=[ket.get(li,attach_S='B') for li in xrange(l,l+nsite_update)]
+            t00=time.time()
+            #get Tc,indices
+            if use_bm:
+                #get bmd = c(l-1)-m(l-1)-m(l)-c(l+1)
+                bms=[lb.bm for lb in K0s[0].labels[:1]+[K.labels[1] for K in K0s]+K0s[-1].labels[-1:]]
+                bmd,info=bmg.join_bms(bms,signs=[1]+[1]*nsite_update+[-1]).sort(return_info=True); pmd=info['pm']
+                bmd=bmd.compact_form()
+                #get the indices
+                sls=bmd.get_slice(bmd.index_qn(zeros(len(bmg.qstring),dtype='int32')).item())
+                indices=pmd[sls]
+                #turn the indices into subindices.
+                NN=array([bm.N for bm in bms])
+                cinds=ind2c(indices,NN)
+                #get the sub-block.
+                if nsite_update==2:
+                    TcL,TcR=(FL*Os[0]).chorder([0,2,1,3,4]),(Os[1]*FR).chorder([0,1,3,2,4]) #ascmb,bsamc kron-> assa,cmmc
+                    TcL,TcR=TcL.reshape([prod(TcL.shape[:2]),-1,TcL.shape[-1]]),TcR.reshape([TcR.shape[0],prod(TcR.shape[1:3]),-1])
+                elif nsite_update==1:
+                    TcL,TcR=(FL*Os[0]).chorder([0,2,1,3,4]),FR.chorder([1,0,2]) #acsmb;bsmac
+                    TcL=TcL.reshape([prod(TcL.shape[:2]),-1,TcL.shape[-1]])
+
+                TcL.eliminate_zeros(ZERO_REF)
+                TcR.eliminate_zeros(ZERO_REF)
+                cdim=len(indices)
+                Tc=csr_matrix((cdim,cdim))
+                tk=tp=0
+                for i in xrange(TcL.shape[-1]):
                     t00=time.time()
-                    #get Tc,indices
-                    if use_bm:
-                        #get bmd = c(l-1)-m(l-1)-m(l)-c(l+1)
-                        bms=[lb.bm for lb in K0s[0].labels[:1]+[K.labels[1] for K in K0s]+K0s[-1].labels[-1:]]
-                        bmd,pmd=bmg.join_bms(bms,signs=[1]+[1]*nsite_update+[-1])
-                        #get the indices taken
-                        sls=bmd.get_slice(zeros(len(bmg.qstring),dtype='int32'),useqn=True)
-                        indices=pmd[sls]
-                        #turn the indices into subindices.
-                        NN=array([bm.N for bm in bms])
-                        cinds=ind2c(indices,NN)
-                        #get the sub-block.
-                        if nsite_update==2:
-                            TcL,TcR=(FL*Os[0]).chorder([0,2,1,3,4]),(Os[1]*FR).chorder([0,1,3,2,4]) #acsmb;bsmac
-                            TcL,TcR=TcL.reshape([prod(TcL.shape[:2]),-1,TcL.shape[-1]]),TcR.reshape([TcR.shape[0],prod(TcR.shape[1:3]),-1])
-                            #Tc=csr_matrix(fget_subblock2b(FL,Os[0],Os[1],FR,cinds))
-                        elif nsite_update==1:
-                            TcL,TcR=(FL*Os[0]).chorder([0,2,1,3,4]),FR.chorder([1,0,2]) #acsmb;bsmac
-                            TcL=TcL.reshape([prod(TcL.shape[:2]),-1,TcL.shape[-1]])
-                            #Tc=csr_matrix(fget_subblock1(FL,Os[0],FR,cinds))
+                    #TcL(as;mc;b), TcR(b;as;mc)
+                    Tci=kron_csr(csr_matrix(TcL[:,:,i]),csr_matrix(TcR[i,:,:]),takerows=indices)
+                    #Tci=Tci.tocsc()[:,indices]
+                    t11=time.time()
+                    Tc=Tc+Tci.tocsc()[:,indices]
+                    #Tc+=Tci
+                    t22=time.time()
+                    tk+=t11-t00
+                    tp+=t22-t11
+                print '@kron: %s, @sum: %s'%(tk,tp)
+            else:
+                if nsite_update==2:
+                    Tc=(FL*Os[0]*Os[1]*FR).chorder([0,2,4,6,1,3,5,7])
+                else:
+                    Tc=(FL*Os[0]*FR).chorder([0,2,4,1,3,5])
+                Tc.eliminate_zeros(ZERO_REF)
+                Tc=csr_matrix(Tc.reshape([prod(Tc.shape[:2+nsite_update]),-1]))
+            t1=time.time()
 
-                        TcL[abs(TcL)<ZERO_REF]=0
-                        TcR[abs(TcR)<ZERO_REF]=0
-                        cdim=len(indices)
-                        Tc=csr_matrix((cdim,cdim))
-                        for i in xrange(TcL.shape[-1]):
-                            Tci=kron_csr(csr_matrix(TcL[:,:,i]),csr_matrix(TcR[i,:,:]),takerows=indices)
-                            Tc=Tc+Tci.tocsc()[:,indices]
-                    else:
-                        if nsite_update==2:
-                            Tc=(FL*Os[0]*Os[1]*FR).chorder([0,2,4,6,1,3,5,7])
-                        else:
-                            Tc=(FL*Os[0]*FR).chorder([0,2,4,1,3,5])
-                        Tc[abs(Tc)<ZERO_REF]=0
-                        Tc=csr_matrix(Tc.reshape([prod(Tc.shape[:2+nsite_update]),-1]))
-                    t1=time.time()
+            #third, get the initial vector
+            V0=reduce(lambda x,y:x*y,K0s)
+            v0=asarray(V0.ravel())
+            if use_bm:
+                v0c=v0[indices]
+            else:
+                v0c=v0
+            if which=='SA':
+                E,Vc=_eigsh(Tc,v0=v0c,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1,eigen_solver=self.eigen_solver)
+            elif which=='SL':
+                E,Vc=_eigsh(Tc.todense(),v0=v0c,which='SL',eigen_solver=self.eigen_solver)
+            else:
+                raise ValueError()
 
-                    #third, get the initial vector
-                    V0=reduce(lambda x,y:x*y,K0s)
-                    v0=asarray(V0.ravel())
-                    if use_bm:
-                        v0c=v0[indices]
-                    else:
-                        v0c=v0
-                    if which=='SA':
-                        E,Vc=self._eigsh(Tc,v0=v0c,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1)
-                    elif which=='SL':
-                        E,Vc=self._eigsh(Tc.todense(),v0=v0c,which='SL')
-                    else:
-                        raise ValueError()
+            if use_bm:
+                V=zeros(bmd.N,dtype='complex128')
+                V[indices]=Vc
+            else:
+                V=Vc
+            overlap=v0.dot(V)
+            t2=time.time()
 
-                    if use_bm:
-                        V=zeros(bmd.N,dtype='complex128')
-                        V[indices]=Vc
-                    else:
-                        V=Vc
-                    overlap=v0.dot(V)
-                    t2=time.time()
+            #update our ket,
+            if nsite_update==2:
+                #if 2 site update, perform svd and truncate.
+                Vm=Tensor(V.reshape(K0s[0].shape[:2]+K0s[1].shape[1:]),labels=K0s[0].labels[:2]+K0s[1].labels[1:])
+                K1,S,K2=Vm.svd(cbond=2,cbond_str='%s_%s'%(self.labels[-1],l+1),signs=[1,1,-1,1],bmg=bmg)
+                #do the truncation
+                if len(S)>maxN[iiter]:
+                    Smin=sort(S)[-maxN[iiter]]
+                    kpmask=S>=Smin
+                    K1,S,K2=K1.take(kpmask,axis=-1),S[kpmask],K2.take(kpmask,axis=0)
+                K1.eliminate_zeros(ZERO_REF)
+                K2.eliminate_zeros(ZERO_REF)
+                #set datas
+                bdim=len(S)
+                ket.ML[ket.l-1]=K1
+                ket.S=S
+                ket.ML[ket.l]=K2
+            elif nsite_update==1:
+                if direction=='->':
+                    ket.ML[ket.l]=Tensor(V.reshape(V0.shape),labels=V0.labels)
+                    ket.S=ones(V0.shape[0])  #S has been taken into consideration, so, don't use it anymore.
+                    ket>>1
+                else:
+                    ket.l+=1
+                    ket.ML[ket.l-1]=Tensor(V.reshape(V0.shape),labels=V0.labels)
+                    ket.S=ones(V0.shape[-1])  #S has been taken into consideration, so, don't use it anymore.
+                    ket<<1
+                bdim=len(ket.S)
 
-                    #update our ket,
-                    if nsite_update==2:
-                        #if 2 site update, perform svd and truncate.
-                        Vm=V.reshape([FL.shape[0]*hndim,FR.shape[0]*hndim])
-                        if use_bm:
-                            #first, find the block structure and make it block diagonal
-                            bml=bmg.join_bms([V0.labels[0].bm,V0.labels[1].bm],signs=[1,1],compact_form=False)[0]
-                            bmr=bmg.join_bms([V0.labels[2].bm,V0.labels[3].bm],signs=[-1,1],compact_form=False)[0]
-                            K1K2=Tensor(Vm,labels=[BLabel('KL',bml),BLabel('KR',bmr)])
-                            K1K2,pms=K1K2.b_reorder(return_pm=True)
-                            #perform svd and roll back to original non-block structure
-                            K1,S,K2=svdbd(K1K2,cbond_str='%s_%s'%(self.labels[-1],l+1))
-                            K1,K2=K1[argsort(pms[0])],K2[:,argsort(pms[1])]
-                        else:
-                            #perform svd and roll back to original non-block structure
-                            K1,S,K2=svd(Vm,full_matrices=False)
-                            cbond_str='%s_%s'%(self.labels[-1],l+1)
-                            K1=Tensor(K1,labels=['KL',cbond_str])
-                            K2=Tensor(K2,labels=[cbond_str,'KR'])
-                        #do the truncation
-                        if len(S)>maxN[iiter]:
-                            Smin=sort(S)[-maxN[iiter]]
-                            kpmask=S>=Smin
-                            K1,S,K2=K1[:,kpmask],S[kpmask],K2[kpmask]
-                            if use_bm:
-                                bm_new=trunc_bm(K2.labels[0].bm,kpmask=kpmask)
-                                K2.labels[0].bm=K1.labels[1].bm=bm_new
-                        K1[abs(K1)<ZERO_REF]=0
-                        K2[abs(K2)<ZERO_REF]=0
-                        #set datas
-                        bdim=len(S)
-                        ket.ML[ket.l-1]=Tensor(K1.reshape([K0s[0].shape[0],hndim,bdim]),labels=K0s[0].labels[:2]+K1.labels[-1:])
-                        ket.S=S
-                        ket.ML[ket.l]=Tensor(K2.reshape([bdim,hndim,K0s[1].shape[2]]),labels=K2.labels[:1]+K0s[1].labels[1:])
-                    elif nsite_update==1:
-                        if direction=='->':
-                            ket.ML[ket.l]=Tensor(V.reshape(V0.shape),labels=V0.labels)
-                            ket.S=ones(V0.shape[0])  #S has been taken into consideration, so, don't use it anymore.
-                            ket>>1
-                        else:
-                            ket.l+=1
-                            ket.ML[ket.l-1]=Tensor(V.reshape(V0.shape),labels=V0.labels)
-                            ket.S=ones(V0.shape[-1])  #S has been taken into consideration, so, don't use it anymore.
-                            ket<<1
-                        bdim=len(ket.S)
+            #update our contractions.
+            #1. the left part
+            self.con.lupdate(ket.l)
+            #2. the right part
+            self.con.rupdate(nsite-ket.l)
+            t3=time.time()
 
-                    #update our contractions.
-                    #1. the left part
-                    self.con.lupdate(ket.l)
-                    #2. the right part
-                    self.con.rupdate(nsite-ket.l)
-                    t3=time.time()
+            #schedular check
+            elist.append(E)
+            diff=Inf if len(elist)<=1 else elist[-1]-elist[-2]
+            print 'Get E = %.12f, tol = %s, Elapse -> %s, %s states kept, nnz= %s, overlap %s.'%(E,diff,t3-t0,bdim,Tc.nnz,overlap)
+            print 'Time: get Tc(%s), eigen(%s), svd(%s)'%(t1-t0,t2-t1,t3-t2)
+            if iiter==stop[0] and direction==stop[1] and l==stop[2]:
+                print 'RUN COMPLETE!'
+                return E,ket
 
-                    #schedular check
-                    elist.append(E)
-                    diff=Inf if len(elist)<=1 else elist[-1]-elist[-2]
-                    print 'Get E = %.12f, tol = %s, Elapse -> %s, %s states kept, nnz= %s, overlap %s.'%(E,diff,t3-t0,bdim,Tc.nnz,overlap)
-                    print 'Time: get Tc(%s), eigen(%s), svd(%s)'%(t1-t0,t2-t1,t3-t2)
-                    if iiter+1==endpoint[0] and direction==endpoint[1] and l==endpoint[2]:
-                        print 'RUN COMPLETE!'
-                        return E,ket
-
-            #schedular check for each iteration
-            if iiter==0:
-                E_last=Inf
-            diff=E_last-E
-            E_last=E
-            print 'ITERATION SUMMARY: E/site = %s, tol = %s'%(E,diff)
+            if direction=='<-' and l==0:
+                #schedular check for each iteration
+                if iiter==0:
+                    E_last=Inf
+                diff=E_last-E
+                E_last=E
+                print 'ITERATION SUMMARY: E/site = %s, tol = %s'%(E,diff)
 
     def warmup(self,maxiter=10):
         '''Initialize the state.'''
         run10=run5=maxiter/3
         run20=maxiter-run10-run5
-        self.run(maxN=[5]*run5+[10]*run10+[20]*run20,which='SA',nsite_update=2,endpoint=(maxiter,'<-',1))
+        self.run(maxiter,maxN=[3]*run5+[8]*run10+[16]*run20,which='SA')
+
+    def infinite_run(self,HP,nseg,niter_inner,*args,**kwargs):
+        ncello2=HP.nsite/2
+        HPL,HPR=reduce(lambda a,b:a*b,self.HP.OL[:ncello2]),reduce(lambda a,b:a*b,self.HP.OL[ncello2:])
+        start,stop=(0,'->',0),(niter_inner-1,'<-',ncello2-nsite_update/2)
+        for i in xrange(nseg):
+            self.sweep(start,stop,*args,**kwargs)
+
+            ket,bra=self.con.ket,self.con.bra
+            HL0=HL0*bra.ML[:ncello2]*HPL*ket.ML[:ncello2]
+            HR0=bra.ML[ncello2:]*HPR*ket.ML[ncello2:]*HR0
+
+            #make prediction of ket
+            S=1/S_pre
+            ket.ML=S*ket[ncello2:]+ket[:ncello2]*S
+            S_pre=ket.S
+            ket.S=S
+
+            #update environments
+            self.con.update_env(HL0,HR0)
+            self.con.update_ket(ket)
+            print '||| EXPAND %s ||| Enery = %s'%(i,self.con.evaluate())
+
+class IVMPSEngine(object):
+    '''
+    Infinite VMPS.
+
+    Attributes:
+        :H0: <MPO>, hamiltonian of two ends.
+        :HP: <MPO>, repeated block of hamiltonian.
+        :k0: <MPS>, initial eigen state for edge hamiltonian.
+        :dqn: number/1darray, good quantum number in a single segment.
+        :eigen_solver: 'JD'/'LC',
+    '''
+    def __init__(self,H0,HP,k0,dqn,eigen_solver='JD'):
+        self.S_pre=identity(1)
+        self.H0=H0
+        self.k0=k0
+        self.HP=HP
+        self.eigen_solver=eigen_solver
+        self.dqn=dqn
+
+        #initialize
+        self.ket=k0.toket()
+
+    def infinite_run(self,niter=100,maxN=20):
+        '''
+        Parameters:
+            :mpo: <MPO>, matrix product states.
+            :Q: func, quantum number as a function of nsite.
+            :maxN: int,
+        '''
+        bmg=self.k0.bmg
+        psite=self.HP.nsite
+        HPL,HPR=reduce(lambda a,b:a*b,self.HP.OL[:psite/2]),reduce(lambda a,b:a*b,self.HP.OL[psite/2:])
+        HL,HR=self.HL,self.HR
+        #generate new mpo
+        for l in xrange(niter):
+            #get Tc,indices
+            #get bmd = c(l-1)-m(l-1)-m(l)-c(l+1)
+            bms=[lb.bm for lb in K0s[0].labels[:1]+[K.labels[1] for K in K0s]+K0s[-1].labels[-1:]]
+            bmd,info=bmg.join_bms(bms,signs=[1]+[1]*nsite_update+[-1]).sort(return_info=True); pmd=info['pm']
+            bmd=bmd.compact_form()
+            #get the indices
+            sls=bmd.get_slice(bmd.index_qn(zeros(len(bmg.qstring),dtype='int32')).item())
+            indices=pmd[sls]
+            #turn the indices into subindices.
+            NN=array([bm.N for bm in bms])
+            cinds=ind2c(indices,NN)
+            #get the sub-block.
+            TcL,TcR=(FL*Os[0]).chorder([0,2,1,3,4]),(Os[1]*FR).chorder([0,1,3,2,4]) #ascmb,bsamc kron-> assa,cmmc
+            TcL,TcR=TcL.reshape([prod(TcL.shape[:2]),-1,TcL.shape[-1]]),TcR.reshape([TcR.shape[0],prod(TcR.shape[1:3]),-1])
+
+            TcL.eliminate_zeros(ZERO_REF)
+            TcR.eliminate_zeros(ZERO_REF)
+            cdim=len(indices)
+            Tc=csr_matrix((cdim,cdim))
+            for i in xrange(TcL.shape[-1]):
+                Tci=kron_csr(csr_matrix(TcL[:,:,i]),csr_matrix(TcR[i,:,:]),takerows=indices)
+                Tc=Tc+Tci.tocsc()[:,indices]
+            t1=time.time()
+
+            #third, get the initial vector
+            V0=reduce(lambda x,y:x*y,K0s)
+            v0=asarray(V0.ravel())
+            if use_bm:
+                v0c=v0[indices]
+            else:
+                v0c=v0
+            if which=='SA':
+                E,Vc=_eigsh(Tc,v0=v0c,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1,eigen_solver=self.eigen_solver)
+            elif which=='SL':
+                E,Vc=_eigsh(Tc.todense(),v0=v0c,which='SL',eigen_solver=self.eigen_solver)
+            else:
+                raise ValueError()
+
+            if use_bm:
+                V=zeros(bmd.N,dtype='complex128')
+                V[indices]=Vc
+            else:
+                V=Vc
+            overlap=v0.dot(V)
+            t2=time.time()
+
+            #update our ket
+            Vm=Tensor(V.reshape(K0s[0].shape[:2]+K0s[1].shape[1:]),labels=K0s[0].labels[:2]+K0s[1].labels[1:])
+            K1,S,K2=Vm.svd(cbond=2,cbond_str='%s_%s'%(self.labels[-1],l+1),signs=[1,1,-1,1],bmg=bmg)
+            #do the truncation
+            if len(S)>maxN[iiter]:
+                Smin=sort(S)[-maxN[iiter]]
+                kpmask=S>=Smin
+                K1,S,K2=K1.take(kpmask,axis=-1),S[kpmask],K2.take(kpmask,axis=0)
+            K1.eliminate_zeros(ZERO_REF)
+            K2.eliminate_zeros(ZERO_REF)
+            #set datas
+            bdim=len(S)
+            ket.ML[ket.l-1]=K1
+            ket.S=S
+            ket.ML[ket.l]=K2
+            #insert into mps
+            insert_cells(ket,(A,B),dqn=Q(l)-Q(l-1))

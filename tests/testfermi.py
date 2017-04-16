@@ -37,7 +37,7 @@ class ChainN(object):
 
         #occupation representation will use <SuperSpaceConfig>, otherwise <SpaceConfig>.
         if self.occ:
-            spaceconfig=SuperSpaceConfig(chorder([1,2,nsite,1]))
+            spaceconfig=SuperSpaceConfig(chorder([nsite,2,1]))
         else:
             spaceconfig=SpaceConfig(chorder([1,2,nsite,1]),kspace=False)
             if abs(U)>0: warnings.warn('U is ignored in non-occupation representation.')
@@ -86,7 +86,7 @@ class TestFH(object):
         self.model_exact=ChainN(t=t,U=0,t2=t2,mu=mu,occ=False,nsite=nsite)
         self.model_occ=ChainN(t=t,U=U,t2=t2,mu=mu,occ=True,nsite=nsite)
         scfg=self.model_occ.hgen.spaceconfig
-        self.spaceconfig1=SuperSpaceConfig(chorder([scfg.nspin,1,scfg.norbit]))
+        self.spaceconfig1=SuperSpaceConfig(chorder([1,scfg.nspin,scfg.norbit]))
 
     def test_disc_symm(self,nsite=40):
         '''
