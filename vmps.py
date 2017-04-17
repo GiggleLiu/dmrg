@@ -192,7 +192,7 @@ class VMPSEngine(object):
     def run(self,nsweep,*args,**kwargs):
         self.sweep(start=(0,'->',0),stop=(nsweep-1,'<-',0),*args,**kwargs)
 
-    def sweep(self,start,stop,maxN=50,tol=0,which='SL',iprint=1):
+    def sweep(self,start,stop,maxN=50,tol=0,which='SA',iprint=1):
         '''
         Run this application.
 
@@ -338,7 +338,7 @@ class VMPSEngine(object):
             elist.append(E)
             diff=Inf if len(elist)<=1 else elist[-1]-elist[-2]
             if iprint>1:
-                print 'Get E = %.12f, tol = %s, Elapse -> %s, %s states kept, nnz= %s, overlap %s.'%(E,diff,t3-t0,bdim,Tc.nnz,overlap)
+                print 'Get E = %.12f, tol = %s, Elapse -> %s, %s states kept, nnz= %s, overlap %s.'%(E,'[-]' if diff==Inf else diff,t3-t0,bdim,Tc.nnz,overlap)
                 print 'Time: get Tc(%s), eigen(%s), svd(%s)'%(t1-t0,t2-t1,t3-t2)
             if iiter==stop[0] and direction==stop[1] and l==stop[2]:
                 if iprint>1:
@@ -352,7 +352,7 @@ class VMPSEngine(object):
                 diff=E_last-E
                 E_last=E
                 if iprint>0:
-                    print 'ITERATION SUMMARY: E/site = %s, tol = %s'%(E,diff)
+                    print 'ITERATION SUMMARY: E/site = %s, tol = %s'%(E,'[-]' if diff==Inf else diff)
 
     def warmup(self,maxiter=10):
         '''Initialize the state.'''
@@ -360,34 +360,14 @@ class VMPSEngine(object):
         run20=maxiter-run10-run5
         self.run(maxiter,maxN=[3]*run5+[8]*run10+[16]*run20,which='SA')
 
-    def infinite_run(self,HP,ngen,niter_inner,*args,**kwargs):
-        ncello2=HP.nsite/2
-        HPL,HPR=reduce(lambda a,b:a*b,self.HP.OL[:ncello2]),reduce(lambda a,b:a*b,self.HP.OL[ncello2:])
-        start,stop=(0,'->',0),(niter_inner-1,'<-',ncello2-nsite_update/2)
-        for i in xrange(ngen):
-            self.sweep(start,stop,*args,**kwargs)
-
-            ket,bra=self.con.ket,self.con.bra
-            HL0=HL0*bra.ML[:ncello2]*HPL*ket.ML[:ncello2]
-            HR0=bra.ML[ncello2:]*HPR*ket.ML[ncello2:]*HR0
-
-            #make prediction of ket
-            S=1/S_pre
-            ket.ML=S*ket[ncello2:]+ket[:ncello2]*S
-            S_pre=ket.S
-            ket.S=S
-
-            #update environments
-            self.con.update_env(HL0,HR0)
-            self.con.update_ket(ket)
-            print '||| EXPAND %s ||| Enery = %s'%(i,self.con.evaluate())
-
-    def generative_run(self,HP,ngen,niter_inner,S_pre=None,*args,**kwargs):
+    def generative_run(self,HP,ngen,niter_inner,S_pre=None,trunc_mps=False,*args,**kwargs):
         '''
         Parameters:
             :HP: list, mpo cells.
             :ngen: int, # of generations.
             :niter_inner: int, # of iteration for each generation.
+            :S_pre: 1darray/None, the singular values of last iteration.
+            :trunc_mps: bool, truncate MPS, used for infinite run.
         '''
         nsite_update=self.nsite_update
         ncell=len(HP)
@@ -403,21 +383,21 @@ class VMPSEngine(object):
             cells[-1]=cells[-1].mul_axis(ket.S,axis=-1)
             ket.insert(l0,cells)
             ket.l=l0+ncell/2
-            S=1/S_pre
-            S_pre=ket.S
-            ket.S=S
+            ket.S,S_pre=1/S_pre,ket.S
             #and canonicalize it
             self.con.ket>>ncell/2-nsite_update/2
             self.con.ket<<ncell-nsite_update
             self.con.ket>>ncell/2-nsite_update/2
             #update MPO
             self.con.mpo.insert(l0,[o.make_copy(copydata=False) for o in HP])
+            if trunc_mps:
+                self.con.keep_only(l0,ncell+l0)
+                l0=0
             self.con.update_env_labels()
             #update environments
-            for j in xrange(ncell/2):
+            for j in xrange(1,ncell/2):
                 self.con.lupdate_env(l0+j)
                 self.con.rupdate_env(l0+j)
-            #self.con.update_env_labels()
 
             if iprint>0:
                 print u'\u25cf EXPAND %s START'%(i)
@@ -430,4 +410,5 @@ class VMPSEngine(object):
                 self.sweep(start,stop,*args,**kwargs)
 
             if iprint>0:
-                print u'\u25cf EXPAND %s RES: Enery/Site = %s'%(i,self.con.evaluate()/ket.nsite)
+                print u'\u25cf EXPAND %s RES: Enery/Site = %s'%(i,self.con.evaluate()/(ket.nsite*(i+2 if trunc_mps else 1)))  #!
+

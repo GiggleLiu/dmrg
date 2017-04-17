@@ -116,13 +116,13 @@ class Contractor(object):
         nsite=self.ket.nsite
         bra=self.bra
         attach_S='A' if self.ket.l==nsite else 'B'
-        FL=Tensor(ones([1,1,1]),labels=[bra.get(0,attach_S=attach_S).labels[0],self.mpo.get(0).labels[0],self.ket.get(0,attach_S=attach_S).labels[0]])
+        FL,FR=self.LPART[0],self.RPART[0]
         for i in xrange(nsite):
             cbra=bra.get(i,attach_S=attach_S)
             cket=self.ket.get(i,attach_S=attach_S)
             ch=self.mpo.get(i)
             FL=cbra*FL*ch*cket
-        return FL.item()
+        return (FL*FR).item()
 
     def initialize_env(self):
         '''Contract all available LPART and RPART.'''
@@ -149,3 +149,13 @@ class Contractor(object):
             else:
                 E.labels=[bra.get(ri-1).labels[-1],mpo.get(ri-1).labels[-1],ket.get(ri-1).labels[-1]]
 
+    def keep_only(self,start,stop):
+        '''Remove the segment from `start` to `stop`.'''
+        nsite=self.ket.nsite
+        self.LPART=self.LPART[start:start+1]
+        self.RPART=self.RPART[nsite-stop:nsite-stop+1]
+        self.ket.remove(stop,nsite)
+        self.ket.remove(0,start)
+        self.mpo.remove(stop,nsite)
+        self.mpo.remove(0,start)
+        self.update_env_labels()

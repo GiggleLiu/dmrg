@@ -156,11 +156,11 @@ class TestVMPS(object):
         for od,it in zip(order,iterator):
             assert_(od==it)
 
-    def test_generative(self):
+    def test_generative(self,trunc_mps):
         '''
         Run vMPS for Heisenberg model.
         '''
-        nsite=8
+        nsite=4
         nspin=2
         model=self.get_model(nsite,nspin=nspin)
         model2=self.get_model(nsite*2,nspin=nspin)
@@ -177,10 +177,10 @@ class TestVMPS(object):
         niter_inner=4 if nsite>2 else 1
         vegn.run(niter_inner,maxN=50,which='SA')
         #warm up
-        vegn.generative_run(HP=model2.H.OL[nsite/2:nsite*3/2],ngen=100,niter_inner=niter_inner,maxN=50,which='SA')
+        vegn.generative_run(HP=model2.H.OL[nsite/2:nsite*3/2],ngen=100,niter_inner=niter_inner,maxN=50,trunc_mps=trunc_mps,which='SA')
         pdb.set_trace()
 
 if __name__=='__main__':
     #TestVMPS().test_vmps()
     #TestVMPS().test_iterator()
-    TestVMPS().test_generative()
+    TestVMPS().test_generative(trunc_mps=True)
