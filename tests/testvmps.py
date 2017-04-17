@@ -93,6 +93,7 @@ class TestVMPS(object):
 
         #setting up the engine
         vegn=VMPSEngine(H=model.H.use_bm(bmg),k0=k0,eigen_solver='JD')
+        pdb.set_trace()
         #check the label setting is working properly
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N) for ai in vegn.ket.ML]))
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N,ai.labels[3].bm.N) for ai in vegn.H.OL]))
@@ -142,6 +143,44 @@ class TestVMPS(object):
         for od,it in zip(order,iterator):
             assert_(od==it)
 
+        print 'Testing 2-site iterator.'
+        nsite=2
+        model=self.get_model(nsite)
+        k0=product_state(config=repeat([0,1],nsite/2),hndim=model.spaceconfig.hndim)
+
+        vegn=VMPSEngine(H=model.H,k0=k0,eigen_solver='LC')
+        start=(1,'->',0)
+        stop=(3,'->',0)
+        order=[(1,'->',0),(2,'->',0),(3,'->',0)]
+        iterator=vegn._get_iterator(start=start,stop=stop)
+        for od,it in zip(order,iterator):
+            assert_(od==it)
+
+    def test_generative(self):
+        '''
+        Run vMPS for Heisenberg model.
+        '''
+        nsite=8
+        nspin=2
+        model=self.get_model(nsite,nspin=nspin)
+        model2=self.get_model(nsite*2,nspin=nspin)
+        #EG,mps=self.dmrgrun(model)
+
+        #run vmps
+        #generate a random mps as initial vector
+        bmg=SimpleBMG(spaceconfig=model.spaceconfig,qstring='M')
+        #k0=product_state(config=random.randint(0,2,nsite),hndim=2)
+        k0=product_state(config=repeat([0,nspin-1],nsite/2),hndim=model.spaceconfig.hndim,bmg=bmg)
+
+        #setting up the engine
+        vegn=VMPSEngine(H=model.H.use_bm(bmg),k0=k0,eigen_solver='JD',iprint=1)
+        niter_inner=4 if nsite>2 else 1
+        vegn.run(niter_inner,maxN=50,which='SA')
+        #warm up
+        vegn.generative_run(HP=model2.H.OL[nsite/2:nsite*3/2],ngen=100,niter_inner=niter_inner,maxN=50,which='SA')
+        pdb.set_trace()
+
 if __name__=='__main__':
-    TestVMPS().test_vmps()
+    #TestVMPS().test_vmps()
     #TestVMPS().test_iterator()
+    TestVMPS().test_generative()

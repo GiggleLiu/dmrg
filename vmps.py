@@ -108,14 +108,16 @@ class VMPSEngine(object):
         :eigen_solver: str, eigenvalue solver.
             *'JD', Jacobi-Davidson method.
             *'LC', Lanczos, method.
+        :iprint: int, print information level.
     '''
-    def __init__(self,H,k0,labels=['s','m','a','b','c'],nsite_update=2,eigen_solver='JD'):
+    def __init__(self,H,k0,labels=['s','m','a','b','c'],nsite_update=2,eigen_solver='JD',iprint=2):
         self.eigen_solver=eigen_solver
         self.nsite_update=nsite_update
         #set up initial ket
         ket=k0
         ket<<ket.l-1  #right normalize the ket to the first bond, where we start our update
         nsite=ket.nsite
+        self.iprint=iprint
 
         #unify labels
         self.labels=labels
@@ -124,7 +126,7 @@ class VMPSEngine(object):
 
         #initial contractions,
         self.con=Contractor(H,ket,bra_bond_str=labels[2])
-        self.con.contract2l()
+        self.con.initialize_env()
 
     @property
     def energy(self):
@@ -141,15 +143,28 @@ class VMPSEngine(object):
         nsite=self.con.ket.nsite
         nsite_update=self.nsite_update
         #validate datas
-        if start[2]<0 or start[2]>nsite-nsite_update or stop[2]<0 or stop[2]>nsite_update:
-            raise ValueError()
         if start[1] not in ['->','<-'] or stop[1] not in ['->','<-']:
             raise ValueError()
+        #check for null iterations
+        if start[2]<0 or start[2]>nsite-nsite_update or stop[2]<0 or stop[2]>nsite-nsite_update:
+            return
+        if stop[0]<start[0]:
+            return
+        elif stop[0]==start[0]:
+            if stop[1]=='->' and start[1]=='<-':
+                return
+            elif stop[0]==start[0] and stop[1]==start[1]:
+                if start[1]=='->' and stop[2]<start[2]:
+                    return
+                elif start[1]=='<-' and stop[2]>start[2]:
+                    return
 
         direction,site=start[1],start[2]
         for iiter in xrange(start[0],stop[0]+1):
-            print '########### STARTING NEW ITERATION %s ################'%(iiter)
+            if self.iprint>1:
+                print '########### STARTING NEW ITERATION %s ################'%(iiter)
             while(True):
+                #if site>=0:  #to ensure 2 site update
                 yield iiter,direction,site
                 if iiter==stop[0] and direction==stop[1] and site==stop[2]:
                     return
@@ -167,11 +182,17 @@ class VMPSEngine(object):
                         break
                     else:
                         site-=1
+                if site<0:
+                    direction,site='->',0
+                    break
+                if site>nsite-nsite_update:
+                    direction,site='<-',nsite-nsite_update
+                    break
 
     def run(self,nsweep,*args,**kwargs):
         self.sweep(start=(0,'->',0),stop=(nsweep-1,'<-',0),*args,**kwargs)
 
-    def sweep(self,start,stop,maxN=50,tol=0,which='SL'):
+    def sweep(self,start,stop,maxN=50,tol=0,which='SL',iprint=1):
         '''
         Run this application.
 
@@ -192,12 +213,15 @@ class VMPSEngine(object):
         nsite_update=self.nsite_update
         use_bm=hasattr(ket,'bmg')
         if use_bm: bmg=ket.bmg
-        if isinstance(maxN,int): maxN=[maxN]*(stop[0]-start[0]+1)
+        if isinstance(maxN,int): maxN=[maxN]*(stop[0]+1)
+        iprint=self.iprint
 
         elist=[]
         for iiter,direction,l in self._get_iterator(start,stop):
-            print 'Running iter = %s, direction = %s, l = %s'%(iiter+1,direction,l)
-            print 'A'*(l)+'.'*nsite_update+'B'*(nsite-l-nsite_update)
+            self.con.initialize_env()
+            if iprint>1:
+                print 'Running iter = %s, direction = %s, l = %s'%(iiter+1,direction,l)
+                print 'A'*(l)+'.'*nsite_update+'B'*(nsite-l-nsite_update)
             t0=time.time()
 
             #construct the Tensor for Hamilonian
@@ -236,14 +260,13 @@ class VMPSEngine(object):
                     t00=time.time()
                     #TcL(as;mc;b), TcR(b;as;mc)
                     Tci=kron_csr(csr_matrix(TcL[:,:,i]),csr_matrix(TcR[i,:,:]),takerows=indices)
-                    #Tci=Tci.tocsc()[:,indices]
                     t11=time.time()
                     Tc=Tc+Tci.tocsc()[:,indices]
-                    #Tc+=Tci
                     t22=time.time()
                     tk+=t11-t00
                     tp+=t22-t11
-                print '@kron: %s, @sum: %s'%(tk,tp)
+                if iprint>5:
+                    print '@kron: %s, @sum: %s'%(tk,tp)
             else:
                 if nsite_update==2:
                     Tc=(FL*Os[0]*Os[1]*FR).chorder([0,2,4,6,1,3,5,7])
@@ -306,18 +329,20 @@ class VMPSEngine(object):
 
             #update our contractions.
             #1. the left part
-            self.con.lupdate(ket.l)
+            self.con.lupdate_env(ket.l)
             #2. the right part
-            self.con.rupdate(nsite-ket.l)
+            self.con.rupdate_env(nsite-ket.l)
             t3=time.time()
 
             #schedular check
             elist.append(E)
             diff=Inf if len(elist)<=1 else elist[-1]-elist[-2]
-            print 'Get E = %.12f, tol = %s, Elapse -> %s, %s states kept, nnz= %s, overlap %s.'%(E,diff,t3-t0,bdim,Tc.nnz,overlap)
-            print 'Time: get Tc(%s), eigen(%s), svd(%s)'%(t1-t0,t2-t1,t3-t2)
+            if iprint>1:
+                print 'Get E = %.12f, tol = %s, Elapse -> %s, %s states kept, nnz= %s, overlap %s.'%(E,diff,t3-t0,bdim,Tc.nnz,overlap)
+                print 'Time: get Tc(%s), eigen(%s), svd(%s)'%(t1-t0,t2-t1,t3-t2)
             if iiter==stop[0] and direction==stop[1] and l==stop[2]:
-                print 'RUN COMPLETE!'
+                if iprint>1:
+                    print 'RUN COMPLETE!'
                 return E,ket
 
             if direction=='<-' and l==0:
@@ -326,7 +351,8 @@ class VMPSEngine(object):
                     E_last=Inf
                 diff=E_last-E
                 E_last=E
-                print 'ITERATION SUMMARY: E/site = %s, tol = %s'%(E,diff)
+                if iprint>0:
+                    print 'ITERATION SUMMARY: E/site = %s, tol = %s'%(E,diff)
 
     def warmup(self,maxiter=10):
         '''Initialize the state.'''
@@ -334,11 +360,11 @@ class VMPSEngine(object):
         run20=maxiter-run10-run5
         self.run(maxiter,maxN=[3]*run5+[8]*run10+[16]*run20,which='SA')
 
-    def infinite_run(self,HP,nseg,niter_inner,*args,**kwargs):
+    def infinite_run(self,HP,ngen,niter_inner,*args,**kwargs):
         ncello2=HP.nsite/2
         HPL,HPR=reduce(lambda a,b:a*b,self.HP.OL[:ncello2]),reduce(lambda a,b:a*b,self.HP.OL[ncello2:])
         start,stop=(0,'->',0),(niter_inner-1,'<-',ncello2-nsite_update/2)
-        for i in xrange(nseg):
+        for i in xrange(ngen):
             self.sweep(start,stop,*args,**kwargs)
 
             ket,bra=self.con.ket,self.con.bra
@@ -356,101 +382,52 @@ class VMPSEngine(object):
             self.con.update_ket(ket)
             print '||| EXPAND %s ||| Enery = %s'%(i,self.con.evaluate())
 
-class IVMPSEngine(object):
-    '''
-    Infinite VMPS.
-
-    Attributes:
-        :H0: <MPO>, hamiltonian of two ends.
-        :HP: <MPO>, repeated block of hamiltonian.
-        :k0: <MPS>, initial eigen state for edge hamiltonian.
-        :dqn: number/1darray, good quantum number in a single segment.
-        :eigen_solver: 'JD'/'LC',
-    '''
-    def __init__(self,H0,HP,k0,dqn,eigen_solver='JD'):
-        self.S_pre=identity(1)
-        self.H0=H0
-        self.k0=k0
-        self.HP=HP
-        self.eigen_solver=eigen_solver
-        self.dqn=dqn
-
-        #initialize
-        self.ket=k0.toket()
-
-    def infinite_run(self,niter=100,maxN=20):
+    def generative_run(self,HP,ngen,niter_inner,S_pre=None,*args,**kwargs):
         '''
         Parameters:
-            :mpo: <MPO>, matrix product states.
-            :Q: func, quantum number as a function of nsite.
-            :maxN: int,
+            :HP: list, mpo cells.
+            :ngen: int, # of generations.
+            :niter_inner: int, # of iteration for each generation.
         '''
-        bmg=self.k0.bmg
-        psite=self.HP.nsite
-        HPL,HPR=reduce(lambda a,b:a*b,self.HP.OL[:psite/2]),reduce(lambda a,b:a*b,self.HP.OL[psite/2:])
-        HL,HR=self.HL,self.HR
-        #generate new mpo
-        for l in xrange(niter):
-            #get Tc,indices
-            #get bmd = c(l-1)-m(l-1)-m(l)-c(l+1)
-            bms=[lb.bm for lb in K0s[0].labels[:1]+[K.labels[1] for K in K0s]+K0s[-1].labels[-1:]]
-            bmd,info=bmg.join_bms(bms,signs=[1]+[1]*nsite_update+[-1]).sort(return_info=True); pmd=info['pm']
-            bmd=bmd.compact_form()
-            #get the indices
-            sls=bmd.get_slice(bmd.index_qn(zeros(len(bmg.qstring),dtype='int32')).item())
-            indices=pmd[sls]
-            #turn the indices into subindices.
-            NN=array([bm.N for bm in bms])
-            cinds=ind2c(indices,NN)
-            #get the sub-block.
-            TcL,TcR=(FL*Os[0]).chorder([0,2,1,3,4]),(Os[1]*FR).chorder([0,1,3,2,4]) #ascmb,bsamc kron-> assa,cmmc
-            TcL,TcR=TcL.reshape([prod(TcL.shape[:2]),-1,TcL.shape[-1]]),TcR.reshape([TcR.shape[0],prod(TcR.shape[1:3]),-1])
-
-            TcL.eliminate_zeros(ZERO_REF)
-            TcR.eliminate_zeros(ZERO_REF)
-            cdim=len(indices)
-            Tc=csr_matrix((cdim,cdim))
-            for i in xrange(TcL.shape[-1]):
-                Tci=kron_csr(csr_matrix(TcL[:,:,i]),csr_matrix(TcR[i,:,:]),takerows=indices)
-                Tc=Tc+Tci.tocsc()[:,indices]
-            t1=time.time()
-
-            #third, get the initial vector
-            V0=reduce(lambda x,y:x*y,K0s)
-            v0=asarray(V0.ravel())
-            if use_bm:
-                v0c=v0[indices]
-            else:
-                v0c=v0
-            if which=='SA':
-                E,Vc=_eigsh(Tc,v0=v0c,projector=None,tol=1e-10,sigma=None,lc_search_space=1,k=1,eigen_solver=self.eigen_solver)
-            elif which=='SL':
-                E,Vc=_eigsh(Tc.todense(),v0=v0c,which='SL',eigen_solver=self.eigen_solver)
-            else:
-                raise ValueError()
-
-            if use_bm:
-                V=zeros(bmd.N,dtype='complex128')
-                V[indices]=Vc
-            else:
-                V=Vc
-            overlap=v0.dot(V)
-            t2=time.time()
-
-            #update our ket
-            Vm=Tensor(V.reshape(K0s[0].shape[:2]+K0s[1].shape[1:]),labels=K0s[0].labels[:2]+K0s[1].labels[1:])
-            K1,S,K2=Vm.svd(cbond=2,cbond_str='%s_%s'%(self.labels[-1],l+1),signs=[1,1,-1,1],bmg=bmg)
-            #do the truncation
-            if len(S)>maxN[iiter]:
-                Smin=sort(S)[-maxN[iiter]]
-                kpmask=S>=Smin
-                K1,S,K2=K1.take(kpmask,axis=-1),S[kpmask],K2.take(kpmask,axis=0)
-            K1.eliminate_zeros(ZERO_REF)
-            K2.eliminate_zeros(ZERO_REF)
-            #set datas
-            bdim=len(S)
-            ket.ML[ket.l-1]=K1
+        nsite_update=self.nsite_update
+        ncell=len(HP)
+        ket=self.con.ket
+        iprint=self.iprint
+        self.con.canomove(ket.nsite/2-ket.l)
+        if S_pre is None: S_pre=ones(ket.check_link(ket.nsite/2-ncell/2))
+        for i in xrange(ngen):
+            l0=ket.nsite/2
+            #make prediction of ket
+            cells=[t.make_copy(copydata=False) for t in ket.ML[l0:l0+ncell/2]+ket.ML[l0-ncell/2:l0]]
+            cells[0]=cells[0].mul_axis(ket.S,axis=0)
+            cells[-1]=cells[-1].mul_axis(ket.S,axis=-1)
+            ket.insert(l0,cells)
+            ket.l=l0+ncell/2
+            S=1/S_pre
+            S_pre=ket.S
             ket.S=S
-            ket.ML[ket.l]=K2
-            #insert into mps
-            insert_cells(ket,(A,B),dqn=Q(l)-Q(l-1))
+            #and canonicalize it
+            self.con.ket>>ncell/2-nsite_update/2
+            self.con.ket<<ncell-nsite_update
+            self.con.ket>>ncell/2-nsite_update/2
+            #update MPO
+            self.con.mpo.insert(l0,[o.make_copy(copydata=False) for o in HP])
+            self.con.update_env_labels()
+            #update environments
+            for j in xrange(ncell/2):
+                self.con.lupdate_env(l0+j)
+                self.con.rupdate_env(l0+j)
+            #self.con.update_env_labels()
+
+            if iprint>0:
+                print u'\u25cf EXPAND %s START'%(i)
+            for iiter in xrange(niter_inner):
+                start,stop=(iiter,'->',l0+ncell/2-nsite_update/2),(iiter,'->',l0+ncell-nsite_update)
+                self.sweep(start,stop,*args,**kwargs)
+                start,stop=(iiter,'<-',l0+ncell-nsite_update-1),(iiter,'<-',l0)
+                self.sweep(start,stop,*args,**kwargs)
+                start,stop=(iiter,'->',l0+1),(iiter,'->',l0+ncell/2-nsite_update/2)
+                self.sweep(start,stop,*args,**kwargs)
+
+            if iprint>0:
+                print u'\u25cf EXPAND %s RES: Enery/Site = %s'%(i,self.con.evaluate()/ket.nsite)

@@ -2,8 +2,10 @@
 Constractor for vmps.
 '''
 
-from pymps import Tensor
 from numpy import *
+import pdb
+
+from pymps import Tensor
 
 __all__=['Contractor']
 
@@ -35,11 +37,35 @@ class Contractor(object):
         initial_data=Tensor(ones([1,1,1]),labels=['%s_%s'%(self.bra_labels[1],nsite),self.mpo.get(nsite-1).labels[-1],self.ket.get(nsite-1).labels[-1]])
         self.RPART=[initial_data]
 
+    def __str__(self):
+        return unicode(self).encode('utf-8')
+
+    def __unicode__(self):
+        mpsl='-A-'
+        mpsr='-A-'
+        mpo=u'-\u25a0-'
+        S=u'\u25c6'
+        nl=self.ket.l
+        nr=self.ket.nsite-self.ket.l
+        ketstr=mpsl*nl+S+mpsr*nr
+        return '%s\n%s\n%s'%(ketstr,mpo*nl+'/'+mpo*nr,ketstr)
+
     @property
     def bra(self):
         return self.ket.tobra(labels=self.bra_labels)
 
-    def lupdate(self,i):
+    def canomove(self,nstep,*args,**kwargs):
+        #self.ket.canomove(nstep,*args,**kwargs)
+        l0=self.ket.l
+        nsite=self.ket.nsite
+        for size in xrange(l0+1,l0+nstep+1):
+            self.ket>>1
+            self.lupdate_env(size)
+        for size in xrange(nsite-l0+1,nsite-l0-nstep+1):
+            self.ket<<1
+            self.rupdate_env(size)
+
+    def lupdate_env(self,i):
         '''
         Update LPARTs.
 
@@ -60,7 +86,7 @@ class Contractor(object):
             self.LPART[i]=FL
             self.LPART=self.LPART[:i+1]
 
-    def rupdate(self,i):
+    def rupdate_env(self,i):
         '''
         Update RPARTs.
 
@@ -98,18 +124,28 @@ class Contractor(object):
             FL=cbra*FL*ch*cket
         return FL.item()
 
-    def show(self,space=2):
-        '''Show the contraction Graphically.'''
-        nitem=self.noperand
-        for i,item in enumerate(self.operands):
-            item.show(offset=(0,(nitem-i)*space))
-
-    def contract2l(self):
+    def initialize_env(self):
         '''Contract all available LPART and RPART.'''
         l=self.ket.l
-        for i in xrange(1,l):
-            self.lupdate(i)
-        for i in xrange(1,self.ket.nsite-l+1):
-            self.rupdate(i)
+        for size in xrange(1,l+1):
+            self.lupdate_env(size)
+        for size in xrange(1,self.ket.nsite-l+1):
+            self.rupdate_env(size)
 
+    def update_env_labels(self):
+        '''update all environment labels.'''
+        ket=self.ket
+        mpo=self.mpo
+        bra=self.bra
+        for i,E in enumerate(self.LPART):
+            if i!=0:
+                E.labels=[bra.get(i-1).labels[-1],mpo.get(i-1).labels[-1],ket.get(i-1).labels[-1]]
+            else:
+                E.labels=[bra.get(i).labels[0],mpo.get(i).labels[0],ket.get(i).labels[0]]
+        for i,E in enumerate(self.RPART):
+            ri=ket.nsite-i
+            if i!=0:
+                E.labels=[bra.get(ri).labels[0],mpo.get(ri).labels[0],ket.get(ri).labels[0]]
+            else:
+                E.labels=[bra.get(ri-1).labels[-1],mpo.get(ri-1).labels[-1],ket.get(ri-1).labels[-1]]
 
