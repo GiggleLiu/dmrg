@@ -32,8 +32,8 @@ class ChainN(object):
 
         #define the operator of the system
         hgen.register_params({
-            't1':self.t,
-            't2':self.t2,
+            '-t1':-self.t,
+            '-t2':-self.t2,
             'U':self.U,
             '-mu':-self.mu,
             })
@@ -47,9 +47,9 @@ class ChainN(object):
 
         #add the hopping term.
         op_t1=op_simple_hopping(label='hop1',spaceconfig=spaceconfig,bonds=b1s)
-        hgen.register_operator(op_t1,param='t1')
+        hgen.register_operator(op_t1,param='-t1')
         op_t2=op_simple_hopping(label='hop2',spaceconfig=spaceconfig,bonds=b2s)
-        hgen.register_operator(op_t2,param='t2')
+        hgen.register_operator(op_t2,param='-t2')
         op_n=op_simple_onsite(label='n',spaceconfig=spaceconfig)
         hgen.register_operator(op_n,param='-mu')
 
@@ -136,12 +136,13 @@ def test_inff(mode='save'):
     '''
     t=1.
     U=2.
+    mu=U/2.
     #generate a random mps as initial vector
     spaceconfig1=SuperSpaceConfig([1,2,1])
     bmg=SimpleBMG(spaceconfig=spaceconfig1,qstring='QM')
     k0=product_state(config=array([1,2]),hndim=spaceconfig1.hndim,bmg=bmg)
 
-    model2=ChainN(t=t,U=U,nsite=2)
+    model2=ChainN(t=t,U=U,nsite=2,mu=mu)
     mpo2=model2.hchain.toMPO(bmg=bmg,method='direct')
 
     model=ChainN(t=t,U=U,nsite=4)
@@ -150,9 +151,9 @@ def test_inff(mode='save'):
     mpo=model.hchain.toMPO(bmg=bmg,method='direct')
     #setting up the engine
     vegn=VMPSEngine(H=mpo2,k0=k0,eigen_solver='LC')
+    filetoken='con_dump_U%s_t%s_mu%s'%(U,t,mu)
     if mode=='save':
-        vegn.generative_run(HP=mpo4.OL[1:3],ngen=1000,niter_inner=1,maxN=200,trunc_mps=True,which='SA')
-        filetoken='test_contractor_dump'
+        vegn.generative_run(HP=mpo4.OL[1:3],ngen=100,niter_inner=1,maxN=100,trunc_mps=True,which='SA')
         vegn.con.dump_data(filetoken)
     else:
         vegn.con.load_data(filetoken)
