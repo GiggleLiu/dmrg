@@ -15,6 +15,8 @@ from blockmatrix import SimpleBMG
 
 from vmps import VMPSEngine
 
+random.seed(2)
+
 def test_inff(mode='save'):
     '''
     Run infinite vMPS for Heisenberg model.
@@ -88,6 +90,28 @@ def US_mutual_info(US,sndim1=2,sndim2=2):
     mutual_info=get_mutual_information(ts=t,env=[envl,envr])
     return mutual_info
 
+def quick_mutual_info(U,S,sndim1=2,sndim2=2):
+    '''
+    mutual information of s1, s2.
+
+    Parameters:
+        :U,S: U,S in MPS.
+    '''
+    US=U.mul_axis(S,axis=-1)
+    nr=US.shape[-1]
+    ts=Tensor(US.reshape([-1,sndim1,sndim2,nr]),labels=['al','m1','m2','ar'])
+    tsbra=ts.make_copy(labels=[ts.labels[0],'s1',
+            's2',ts.labels[3]]).conj()
+    rho12=tsbra*ts
+    rho1=trace(rho12,axis1=1,axis2=3)
+    rho2=trace(rho12,axis1=0,axis2=2)
+    rho12=rho12.reshape([rho12.shape[0]*rho12.shape[1],-1])
+
+    #calculate mutual information
+    mutual_info=entropy(rho1)+entropy(rho2)-entropy(rho12)
+    return mutual_info
+
+
 def test_mutual():
     #generate test case
     nl=nrr=50
@@ -105,7 +129,8 @@ def hubbard_mutual():
     mu=U/2.
     filetoken='con_dump_U%s_t%s_mu%s'%(U,t,mu)
     mps=quickload(filetoken+'.mps.dat')
-    mutual_info=US_mutual_info(mps.get(0).mul_axis(mps.S,axis=-1))
+    mutual_info=quick_mutual_info(mps.get(0),mps.S)
+    #mutual_info=US_mutual_info(mps.get(0).mul_axis(mps.S,axis=-1))
     print 'mutual_info = %s'%mutual_info
     pdb.set_trace()
 
