@@ -10,7 +10,7 @@ from scipy.sparse import kron as skron
 from matplotlib.pyplot import *
 import time,pdb
 
-from pymps import contract,Tensor,check_validity_mps,BLabel,check_flow_mpx
+from pymps import contract,Tensor,check_validity_mps,BLabel,check_flow_mpx,get_sweeper
 from contractor import Contractor
 from pymps.mps import _autoset_bms
 from blockmatrix import trunc_bm
@@ -142,6 +142,7 @@ class VMPSEngine(object):
     def _get_iterator(self,start,stop):
         nsite=self.con.ket.nsite
         nsite_update=self.nsite_update
+
         #validate datas
         if start[1] not in ['->','<-'] or stop[1] not in ['->','<-']:
             raise ValueError()
@@ -217,7 +218,8 @@ class VMPSEngine(object):
         iprint=self.iprint
 
         elist=[]
-        for iiter,direction,l in self._get_iterator(start,stop):
+        iterator=get_sweeper(start,stop,nsite=nsite-nsite_update,iprint=self.iprint)
+        for iiter,direction,l in iterator:
             self.con.initialize_env()
             if iprint>1:
                 print 'Running iter = %s, direction = %s, l = %s'%(iiter+1,direction,l)

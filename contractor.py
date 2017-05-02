@@ -3,9 +3,10 @@ Constractor for vmps.
 '''
 
 from numpy import *
-import pdb
+import pdb,cPickle
 
 from pymps import Tensor
+from tba.hgen import quicksave,quickload
 
 __all__=['Contractor']
 
@@ -159,3 +160,11 @@ class Contractor(object):
         self.mpo.remove(stop,nsite)
         self.mpo.remove(0,start)
         self.update_env_labels()
+
+    def dump_data(self,filetoken):
+        quicksave(filetoken+'.env.dat',(self.LPART,self.RPART))
+        quicksave(filetoken+'.mps.dat',self.ket)
+
+    def load_data(self,filetoken):
+        self.ket=quickload(filetoken+'.mps.dat')
+        self.LPART,self.RPART=quickload(filetoken+'.env.dat')

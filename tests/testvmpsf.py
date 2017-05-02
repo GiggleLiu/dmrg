@@ -100,8 +100,8 @@ def test_int():
     '''
     Run vMPS for Heisenberg model.
     '''
-    nsite=5
-    model=ChainN(t=-1.,U=1.,nsite=nsite)
+    nsite=32
+    model=ChainN(t=1.,U=2.,nsite=nsite)
     spaceconfig1=SuperSpaceConfig([1,2,1])
     #EG,mps=self.dmrgrun(model)
 
@@ -110,11 +110,11 @@ def test_int():
     bmg=SimpleBMG(spaceconfig=spaceconfig1,qstring='QM')
     #k0=product_state(config=random.randint(0,2,nsite),hndim=2)
     k0=product_state(config=repeat([1,2],nsite/2),hndim=spaceconfig1.hndim,bmg=bmg)
-    mpo=model.hchain.toMPO(bmg=bmg,method='addition').compress(kernal='ldu')[0]
-    mpo.eliminate_zeros(1e-8)
-    mpo2=model.hchain.toMPO(bmg=bmg,method='direct')
-    mpo3=model.hchain.toMPO(bmg=bmg,method='direct').compress(kernal='ldu')[0]
-    pdb.set_trace()
+    #mpo=model.hchain.toMPO(bmg=bmg,method='addition').compress(kernel='ldu')[0]
+    #mpo.eliminate_zeros(1e-8)
+    mpo=model.hchain.toMPO(bmg=bmg,method='direct')
+    #mpo3=model.hchain.toMPO(bmg=bmg,method='direct').compress(kernel='ldu')[0]
+    #mpo4=model.hchain.toMPO(bmg=bmg,method='direct').compress(kernel='dpl')[0]
     #k0=product_state(config=repeat([0,2],nsite/2),hndim=model.spaceconfig.hndim,bmg=bmg)
 
     #setting up the engine
@@ -125,11 +125,40 @@ def test_int():
     #warm up
     vegn.warmup(10)
     vegn.eigen_solver='LC'
-    vegn.run(maxN=[40,50,50,50,50,50,50],which='SA',nsite_update=2,endpoint=(5,'->',0))
+    vegn.run(6,maxN=[40,50,50,50,50,50,50])
     pdb.set_trace()
     #vegn.run(maxN=80,which='SA',nsite_update=1,endpoint=(3,'->',0))
     #pdb.set_trace()
 
+def test_inff(mode='save'):
+    '''
+    Run infinite vMPS for Heisenberg model.
+    '''
+    t=1.
+    U=2.
+    #generate a random mps as initial vector
+    spaceconfig1=SuperSpaceConfig([1,2,1])
+    bmg=SimpleBMG(spaceconfig=spaceconfig1,qstring='QM')
+    k0=product_state(config=array([1,2]),hndim=spaceconfig1.hndim,bmg=bmg)
+
+    model2=ChainN(t=t,U=U,nsite=2)
+    mpo2=model2.hchain.toMPO(bmg=bmg,method='direct')
+
+    model=ChainN(t=t,U=U,nsite=4)
+    mpo4=model.hchain.toMPO(bmg=bmg,method='direct')
+
+    mpo=model.hchain.toMPO(bmg=bmg,method='direct')
+    #setting up the engine
+    vegn=VMPSEngine(H=mpo2,k0=k0,eigen_solver='LC')
+    if mode=='save':
+        vegn.generative_run(HP=mpo4.OL[1:3],ngen=1000,niter_inner=1,maxN=200,trunc_mps=True,which='SA')
+        filetoken='test_contractor_dump'
+        vegn.con.dump_data(filetoken)
+    else:
+        vegn.con.load_data(filetoken)
+    pdb.set_trace()
+
 
 #test_nonint()
-test_int()
+#test_int()
+test_inff()
