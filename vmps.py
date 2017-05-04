@@ -191,7 +191,7 @@ class VMPSEngine(object):
                     break
 
     def run(self,nsweep,*args,**kwargs):
-        self.sweep(start=(0,'->',0),stop=(nsweep-1,'<-',0),*args,**kwargs)
+        self.sweep(start=(0,'->',self.con.ket.l-1),stop=(nsweep-1,'<-',0),*args,**kwargs)
 
     def sweep(self,start,stop,maxN=50,tol=0,which='SA',iprint=1):
         '''

@@ -67,7 +67,6 @@ class TestVMPS(object):
 
         #setting up the engine
         vegn=VMPSEngine(H=model.H.use_bm(bmg),k0=k0,eigen_solver='JD')
-        pdb.set_trace()
         #check the label setting is working properly
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N) for ai in vegn.ket.ML]))
         assert_(all([ai.shape==(ai.labels[0].bm.N,ai.labels[1].bm.N,ai.labels[2].bm.N,ai.labels[3].bm.N) for ai in vegn.H.OL]))
